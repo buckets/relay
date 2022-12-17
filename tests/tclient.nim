@@ -21,7 +21,7 @@ proc handleEvent(handler: ClientHandler, ev: RelayEvent, remote: RelayClient) =
 proc newClientHandler(): ClientHandler =
   new(result)
 
-proc pop(client: ClientHandler, k: EventKind): Future[RelayEvent] {.async, gcsafe.} =
+proc popEvent(client: ClientHandler, k: EventKind): Future[RelayEvent] {.async, gcsafe.} =
   ## Wait for and remove particular event type from the queue
   # Since this is just for tests, this does dumb polling
   var res: RelayEvent
@@ -58,12 +58,12 @@ test "basic":
     client1.connect(keys2.pk)
     client2.connect(keys1.pk)
 
-    var atob = (waitFor c1h.pop(Connected)).conn_id
-    var btoa = (waitFor c2h.pop(Connected)).conn_id
-    check atob >= 0
-    check btoa >= 0
+    var atob = (waitFor c1h.popEvent(Connected)).conn_pubkey
+    var btoa = (waitFor c2h.popEvent(Connected)).conn_pubkey
+    check atob.string != ""
+    check btoa.string != ""
     
-    client1.send(atob, "hello")
-    check (waitFor c2h.pop(Data)).data == "hello"
-    client2.send(btoa, "a".repeat(4096))
-    check (waitFor c1h.pop(Data)).data == "a".repeat(4096)
+    client1.sendData(atob, "hello")
+    check (waitFor c2h.popEvent(Data)).data == "hello"
+    client2.sendData(btoa, "a".repeat(4096))
+    check (waitFor c1h.popEvent(Data)).data == "a".repeat(4096)

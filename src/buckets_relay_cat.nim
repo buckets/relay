@@ -22,22 +22,23 @@ proc newHandler(): ConsoleClientHandler =
   result.dc = newFuture[void]("ConsoleClientHandler")
 
 proc handleEvent(handler: ConsoleClientHandler, ev: RelayEvent, remote: RelayClient) =
+  debug "<" & ev.dbg
   case ev.kind
   of Who:
-    debug &"Server sent Who"
+    discard
   of Authenticated:
-    info &"Successfully authenticated!"
+    discard
   of Connected:
-    debug &"Connected to {ev.conn_pubkey.string.encode} ({ev.conn_id})"
+    discard
     let data = stdin.readAll()
-    remote.send(ev.conn_id, data)
+    remote.sendData(ev.conn_pubkey, data)
   of Disconnected:
-    debug &"Disconnected from {ev.dcon_pubkey.string.encode} ({ev.dcon_id})"
+    discard
     handler.dc.complete()
   of Data:
-    debug &"Received some data {ev.sender_id}: {ev.data.len}"
+    discard
   of ErrorEvent:
-    error &"Received error {ev.err_message}"
+    discard
   stderr.flushFile()
 
 proc connect(pubkey: PublicKey, url: string, keys: KeyPair, username: string, password: string) =

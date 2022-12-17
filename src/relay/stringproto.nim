@@ -16,13 +16,11 @@ proc dumps*(ev: RelayEvent): string =
   of Authenticated:
     discard
   of Connected:
-    result.add nsencode($ev.conn_id)
     result.add nsencode(ev.conn_pubkey.string)
   of Disconnected:
-    result.add nsencode($ev.dcon_id)
     result.add nsencode(ev.dcon_pubkey.string)
   of Data:
-    result.add nsencode($ev.sender_id)
+    result.add nsencode($ev.sender_pubkey.string)
     result.add nsencode(ev.data)
   of ErrorEvent:
     result.add nsencode(ev.err_message)
@@ -48,13 +46,11 @@ proc loadsRelayEvent*(msg: string): RelayEvent =
   of Authenticated:
     discard
   of Connected:
-    result.conn_id = decoder.nextMessage().parseInt()
     result.conn_pubkey = decoder.nextMessage().PublicKey
   of Disconnected:
-    result.dcon_id = decoder.nextMessage().parseInt()
     result.dcon_pubkey = decoder.nextMessage().PublicKey
   of Data:
-    result.sender_id = decoder.nextMessage().parseInt()
+    result.sender_pubkey = decoder.nextMessage().PublicKey
     result.data = decoder.nextMessage()
   of ErrorEvent:
     result.err_message = decoder.nextMessage()
@@ -69,9 +65,9 @@ proc dumps*(cmd: RelayCommand): string =
   of Connect:
     result.add nsencode(cmd.conn_pubkey.string)
   of Disconnect:
-    result.add nsencode($cmd.dcon_id)
+    result.add nsencode(cmd.dcon_pubkey.string)
   of SendData:
-    result.add nsencode($cmd.send_id)
+    result.add nsencode(cmd.dest_pubkey.string)
     result.add nsencode(cmd.send_data)
 
 proc loadsRelayCommand*(msg: string): RelayCommand =
@@ -94,7 +90,7 @@ proc loadsRelayCommand*(msg: string): RelayCommand =
   of Connect:
     result.conn_pubkey = decoder.nextMessage().PublicKey
   of Disconnect:
-    result.dcon_id = decoder.nextMessage().parseInt()
+    result.dcon_pubkey = decoder.nextMessage().PublicKey
   of SendData:
-    result.send_id = decoder.nextMessage().parseInt()
+    result.dest_pubkey = decoder.nextMessage().PublicKey
     result.send_data = decoder.nextMessage()

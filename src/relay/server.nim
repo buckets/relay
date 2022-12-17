@@ -23,14 +23,14 @@ type
   WSClient = ref object
     ws: WebSocket
     user_id: int64
+    relayserver: RelayServer
 
-proc sendEvent*(c: WSClient, ev: RelayEvent)
-
-type
   RelayServer* = ref object
     relay: Relay[WSClient]
     dbfilename: string
     userdb: Option[DbConn]
+
+# proc sendEvent*(c: WSClient, ev: RelayEvent)
 
 proc newRelayServer*(dbfilename: string): RelayServer =
   new(result)
@@ -272,11 +272,14 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
 #-------------------------------------------------------------
 
 proc sendEvent*(c: WSClient, ev: RelayEvent) =
-  asyncCheck c.ws.send(nsencode(dumps(ev)))
+  let msg = nsencode(dumps(ev))
+  c.relayserver.log_user_data_recv(c.user_id, msg.len)
+  asyncCheck c.ws.send(msg)
 
-proc newWSClient(ws: WebSocket, user_id: int64): WSClient =
+proc newWSClient(rs: RelayServer, ws: WebSocket, user_id: int64): WSClient =
   new(result)
   result.ws = ws
+  result.relayserver = rs
   result.user_id = user_id
 
 proc authenticate*(rs: RelayServer, req: Request): int64 =
@@ -306,17 +309,18 @@ proc handleRequest*(rs: RelayServer, req: Request) {.async, gcsafe.} =
   try:
     # Upgrade protocol to websockets
     var ws = await newWebSocket(req)
-    var wsclient = newWSClient(ws, user_id)
-    let client_id = rs.relay.add(wsclient)
+    var wsclient = newWSClient(rs, ws, user_id)
+    var relayconn = rs.relay.initAuth(wsclient)
     var decoder = newNetstringDecoder()
     while ws.readyState == Open:
       let packet = await ws.receiveStrPacket()
+      rs.log_user_data_sent(user_id, packet.len)
       decoder.consume(packet)
       while decoder.hasMessage():
         let cmd = loadsRelayCommand(decoder.nextMessage())
         # echo "server: cmd: ", $cmd
-        rs.relay.handleCommand(client_id, cmd)
-    discard rs.relay.removeClient(client_id)
+        rs.relay.handleCommand(relayconn, cmd)
+    rs.relay.removeConnection(relayconn)
   except WebSocketError:
     error "server: socket closed: " & getCurrentExceptionMsg()
     await req.respond(Http400, "Bad request")

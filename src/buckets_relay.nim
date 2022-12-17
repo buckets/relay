@@ -7,6 +7,7 @@ import std/asyncdispatch
 import std/asynchttpserver
 import std/logging
 import std/strformat
+import std/json
 
 import relay/server
 
@@ -33,17 +34,31 @@ proc addverifieduser(dbfilename, username, password: string) =
   doAssert rs.use_email_verification_token(userid, token) == true
   echo "added user"
 
-proc showStats(dbfilename: string, days = 30): string =
-  ## Show some usage stats
-  result.add &"Stats for the past {days} days\n"
-  result.add "==============================\n"
-  result.add "Top users:\n"
+proc stats(dbfilename: string, days = 30): JsonNode =
+  result = %* {
+    "days": days,
+    "users": [],
+    "ips": [],
+  }
   var rs = newRelayServer(dbfilename)
   for row in rs.top_data_users(20, days = days):
-    result.add "  " & $row & "\n"
-  result.add "\nTop IPs:\n"
+    result["users"].add(%* {
+      "sent": row.data.sent,
+      "recv": row.data.recv,
+      "user": row.user,
+    })
+  #   result.add &"| {row.data.sent} | {row.data.recv} | {row.user} |\n"
+  # result.add "\nTop IPs:\n"
   for row in rs.top_data_ips(20, days = days):
-    result.add "  " & $row & "\n"
+    result.add(%* {
+      "sent": row.data.sent,
+      "recv": row.data.recv,
+      "ip": row.ip,
+    })
+
+proc showStats(dbfilename: string, days = 30): string =
+  ## Show some usage stats
+  return stats(dbfilename, days).pretty
 
 when defined(posix):
   proc getpass(prompt: cstring) : cstring {.header: "<unistd.h>", importc: "getpass".}

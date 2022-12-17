@@ -33,11 +33,11 @@ suite "RelayEvent":
   test "Authenticated":
     cev RelayEvent(kind: Authenticated)
   test "Connected":
-    cev RelayEvent(kind: Connected, conn_pubkey: "hi".PublicKey, conn_id: 123)
+    cev RelayEvent(kind: Connected, conn_pubkey: "hi".PublicKey)
   test "Disconnected":
-    cev RelayEvent(kind: Disconnected, dcon_pubkey: "hi".PublicKey, dcon_id: 123)
+    cev RelayEvent(kind: Disconnected, dcon_pubkey: "hi".PublicKey)
   test "Data":
-    cev RelayEvent(kind: Data, sender_id: 424, data: "bob")
+    cev RelayEvent(kind: Data, sender_pubkey: "hey".PublicKey, data: "bob")
   test "ErrorEvent":
     cev RelayEvent(kind: ErrorEvent, err_message: "foo")
 

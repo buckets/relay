@@ -3,14 +3,16 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
-import tables
-import sets; export sets
-import strformat
-import strutils
-import base64
-import options
+import std/base64
+import std/hashes
+import std/logging
+import std/options
+import std/sets; export sets
+import std/strformat
+import std/strutils
+import std/tables
+
 import libsodium/sodium
-import logging
 import ndb/sqlite
 
 template TODO*(msg: string) =
@@ -42,13 +44,11 @@ type
       discard
     of Connected:
       conn_pubkey*: PublicKey
-      conn_id*: int
     of Disconnected:
       dcon_pubkey*: PublicKey
-      dcon_id*: int
     of Data:
       data*: string
-      sender_id*: int
+      sender_pubkey*: PublicKey
     of ErrorEvent:
       err_message*: string
 
@@ -68,54 +68,53 @@ type
     of Connect:
       conn_pubkey*: PublicKey
     of Disconnect:
-      dcon_id*: int
+      dcon_pubkey*: PublicKey
     of SendData:
       send_data*: string
-      send_id*: int
+      dest_pubkey*: PublicKey
   
-  RelayClient = concept rc
-    rc.sendEvent(RelayEvent)
+  # RelayClient = concept rc
+  #   rc.sendEvent(RelayEvent)
   
-  ClientWrap[T: RelayClient] = ref object
-    obj: T
-    client_id: int
+  RelayConnection*[T] = ref object
     challenge: string
-    pubkey: PublicKey
-    connections: HashSet[int]
+    pubkey*: PublicKey
+    peer_connections: HashSet[PublicKey]
+    sender*: T
 
-  Relay*[T: RelayClient] = ref object
-    nextid: int
-    clients: TableRef[int, ClientWrap[T]]
+  Relay*[T] = ref object
+    conns: TableRef[PublicKey, RelayConnection[T]]
+    conn_requests: TableRef[PublicKey, seq[PublicKey]]
     db: DbConn
 
 proc newRelay*[T](): Relay[T] =
   new(result)
-  result.clients = newTable[int, ClientWrap[T]]()
-  result.db = open(":memory:", "", "", "")
-  let db = result.db
-  db.exec(sql"""CREATE TABLE pending_conns (
-    src_pk TEXT,
-    dst_pk TEXT,
-    PRIMARY KEY (src_pk, dst_pk)
-  )""")
-  db.exec(sql"""CREATE TABLE clients (
-    client_id INTEGER,
-    pubkey TEXT,
-    PRIMARY KEY (client_id, pubkey)
-  )""")
-
-proc `$`*(wrap: ClientWrap): string =
-  result.add "[" & $wrap.client_id & ":"
-  if wrap.pubkey.string == "":
-    result.add "----"
-  else:
-    result.add encode(wrap.pubkey.string)
-  result.add "]"
+  result.conns = newTable[PublicKey, RelayConnection[T]]()
+  result.conn_requests = newTable[PublicKey, seq[PublicKey]]()
 
 proc `$`*(a: PublicKey): string =
   a.string.encode()
 
+proc abbr*(s: string, size = 6): string =
+  if s.len > size:
+    result.add s.substr(0, size) & "..."
+  else:
+    result.add(s)
+
+proc abbr*(a: PublicKey): string =
+  a.string.encode().abbr
+
+proc `$`*(conn: RelayConnection): string =
+  result.add "[RConn "
+  if conn.pubkey.string == "":
+    result.add "------"
+  else:
+    result.add conn.pubkey.abbr
+  result.add "]"
+
 proc `==`*(a, b: PublicKey): bool {.borrow.}
+
+proc hash*(p: PublicKey): Hash {.borrow.}
 
 proc `==`*(a, b: RelayEvent): bool =
   if a.kind != b.kind:
@@ -127,11 +126,11 @@ proc `==`*(a, b: RelayEvent): bool =
     of Authenticated:
       return true
     of Connected:
-      return a.conn_id == b.conn_id and a.conn_pubkey == b.conn_pubkey
+      return a.conn_pubkey == b.conn_pubkey
     of Disconnected:
-      return a.dcon_id == b.dcon_id and a.dcon_pubkey == b.dcon_pubkey
+      return a.dcon_pubkey == b.dcon_pubkey
     of Data:
-      return a.sender_id == b.sender_id and a.data == b.data
+      return a.sender_pubkey == b.sender_pubkey and a.data == b.data
     of ErrorEvent:
       return a.err_message == b.err_message
 
@@ -145,192 +144,180 @@ proc `==`*(a, b: RelayCommand): bool =
     of Connect:
       return a.conn_pubkey == b.conn_pubkey
     of Disconnect:
-      return a.dcon_id == b.dcon_id
+      return a.dcon_pubkey == b.dcon_pubkey
     of SendData:
-      return a.send_data == b.send_data and a.send_id == b.send_id
+      return a.send_data == b.send_data and a.dest_pubkey == b.dest_pubkey
+
+proc dbg*(ev: RelayEvent): string =
+  result.add "("
+  case ev.kind
+  of Who:
+    result.add "Who challenge=" & ev.who_challenge.encode().abbr
+  of Authenticated:
+    result.add "Authenticated"
+  of Connected:
+    result.add "Connected " & ev.conn_pubkey.abbr
+  of Disconnected:
+    result.add "Disconnected " & ev.dcon_pubkey.abbr
+  of Data:
+    result.add "Data " & ev.sender_pubkey.abbr & " data=" & $ev.data.len
+  of ErrorEvent:
+    result.add "Error " & ev.err_message
+  else:
+    discard
+  result.add ")"
+
+proc dbg*(cmd: RelayCommand): string =
+  result.add "("
+  case cmd.kind
+  of Iam:
+    result.add &"Iam {cmd.iam_pubkey.abbr} sig={cmd.iam_signature.encode.abbr}"
+  of Connect:
+    result.add &"Connect {cmd.conn_pubkey.abbr}"
+  of Disconnect:
+    result.add &"Disconnect {cmd.dcon_pubkey.abbr}"
+  of SendData:
+    result.add &"SendData {cmd.dest_pubkey.abbr} data={cmd.send_data.len}"
+  result.add ")"
 
 when defined(testmode):
-  proc dump*(relay: Relay): string =
-    for row in relay.db.getAllRows(sql"SELECT * FROM clients"):
-      result.add $row & "\l"
-    for row in relay.db.getAllRows(sql"SELECT * FROM pending_conns"):
-      result.add $row & "\l"
+  # proc dump*(relay: Relay): string =
+  #   for row in relay.db.getAllRows(sql"SELECT * FROM clients"):
+  #     result.add $row & "\l"
+  #   for row in relay.db.getAllRows(sql"SELECT * FROM pending_conns"):
+  #     result.add $row & "\l"
   
-  proc testmode_clients*[T](relay: Relay[T]): TableRef[int, ClientWrap[T]] =
-    relay.clients
+  proc testmode_conns*[T](relay: Relay[T]): TableRef[PublicKey, RelayConnection[T]] =
+    relay.conns
 
-  proc testmode_connections*(wrap: ClientWrap): HashSet[int] =
-    wrap.connections
+  proc testmode_conns*(conn: RelayConnection): HashSet[PublicKey] =
+    conn.peer_connections
 
-
-proc newWrap*[T](obj: T): ClientWrap[T] =
+proc newRelayConnection*[T](sender: T): RelayConnection[T] =
   new(result)
-  result.obj = obj
-  result.connections = initHashSet[int]()
+  result.sender = sender
+  result.peer_connections = initHashSet[PublicKey]()
 
-template sendEvent*(wrap: ClientWrap, ev: RelayEvent) =
-  debug ">" & $ev
-  wrap.obj.sendEvent(ev)
+template sendEvent(conn: RelayConnection, ev: RelayEvent) =
+  debug $conn & "<  " & ev.dbg
+  conn.sender.sendEvent(ev)
 
-template sendError*(wrap: ClientWrap, message: string) =
-  wrap.sendEvent(RelayEvent(
+template sendError(conn: RelayConnection, message: string) =
+  debug $conn & "<  error: " & message
+  conn.sender.sendEvent(RelayEvent(
     kind: ErrorEvent,
     err_message: message,
   ))
 
-proc connectPair*[T](a: var ClientWrap[T], b: var ClientWrap[T]) =
+proc initAuth*[T](relay: var Relay[T], client: T): RelayConnection[T] =
+  ## Ask the client to authenticat itself. After it succeeds, it will
+  ## be added as a connected client.
+  var conn = newRelayConnection[T](client)
+  conn.challenge = randombytes(32)
+  conn.sendEvent(RelayEvent(
+    kind: Who,
+    who_challenge: conn.challenge,
+  ))
+  return conn
+
+proc connectPair[T](a, b: var RelayConnection[T]) =
   ## Connect two clients together
-  a.connections.incl(b.client_id)
-  b.connections.incl(a.client_id)
-  # info &"<conn {a} -> {b}"
-  a.sendEvent(RelayEvent(kind: Connected, conn_pubkey: b.pubkey, conn_id: b.client_id))
-  # info &"<conn {b} -> {a}"
-  b.sendEvent(RelayEvent(kind: Connected, conn_pubkey: a.pubkey, conn_id: a.client_id))
+  a.peer_connections.incl(b.pubkey)
+  b.peer_connections.incl(a.pubkey)
+  a.sendEvent(RelayEvent(kind: Connected, conn_pubkey: b.pubkey))
+  b.sendEvent(RelayEvent(kind: Connected, conn_pubkey: a.pubkey))
 
-proc addConnRequest*(relay: var Relay, alice_id: int, bob_pubkey: PublicKey) =
+proc addConnRequest(relay: var Relay, alice_pubkey: PublicKey, bob_pubkey: PublicKey) =
   ## Add or fulfil a connection request.
-  var alice = relay.clients[alice_id]
-  let db = relay.db
-
-  # are they already connected
-  if alice.connections.len > 0:
-    var query = sql("SELECT * FROM clients WHERE pubkey = ? AND client_id IN (" & "?".repeat(alice.connections.len).join(",") & ")")
-    var args = @[dbValue(bob_pubkey.string)]
-    for conn in alice.connections.items:
-      args.add(dbValue(conn))
-    let row = relay.db.getRow(query, args)
-    if row.isSome:
-      # already connected
-      return
-  var row = relay.db.getRow(sql"""SELECT
-      a.client_id,
-      b.client_id
-    FROM
-      pending_conns as p
-      left join clients as a
-        on p.src_pk = a.pubkey
-      left join clients as b
-        on p.dst_pk = b.pubkey
-    WHERE
-      p.src_pk = ?
-      AND p.dst_pk = ?
-  """, [dbValue(bob_pubkey.string), dbValue(alice.pubkey.string)])
-  if row.isSome:
-    # mutual connection requests
-    relay.db.exec(sql"DELETE FROM pending_conns WHERE src_pk = ? AND dst_pk = ?",
-      [dbValue(bob_pubkey.string), dbValue(alice.pubkey.string)])
-    let bob_id = row.get()[0].i.int
-    var bob = relay.clients[bob_id]
+  var alice = relay.conns[alice_pubkey]
+  if bob_pubkey in alice.peer_connections:
+    # They're already connected
+    return
+  
+  var bob_requests = relay.conn_requests.getOrDefault(bob_pubkey, @[])
+  if alice_pubkey in bob_requests:
+    # They both want to connect. Connect them!
+    bob_requests.delete(bob_requests.find(alice_pubkey))
+    var bob = relay.conns[bob_pubkey]
     connectPair(alice, bob)
+    return
   else:
-    # wait for bob to respond
-    relay.db.exec(sql"INSERT INTO pending_conns (src_pk, dst_pk) VALUES (?, ?)",
-      [dbValue(alice.pubkey.string), dbValue(bob_pubkey.string)])
-    # row = relay.db.getRow(sql"SELECT client_id FROM clients WHERE pubkey = ?", [dbValue(bob_pubkey.string)])
-    # if row.isSome:
-    #   let bob_id = row.get()[0].i.int
-    #   var bob = relay.clients[bob_id]
-    #   bob.sendEvent(RelayEvent(kind: Knock, knock_pubkey: alice.pubkey))
+    # Alice wants to connect with Bob, but he hasn't indicated
+    # that he wants to connect yet.
+    relay.conn_requests.mgetOrPut(alice_pubkey, @[]).add(bob_pubkey)
 
-proc disconnect*(me, other: var ClientWrap) =
-  ## Remove me from other's connections
-  other.connections.excl(me.client_id)
-  other.sendEvent(RelayEvent(kind: Disconnected, dcon_id: me.client_id, dcon_pubkey: me.pubkey))
-
-proc handleCommand*(relay: var Relay, src: int, command: RelayCommand) =
-  debug &"<command {src} {command}"
-  var client = relay.clients[src]
-  defer:
-    relay.clients[src] = client
+proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: RelayCommand) =
+  debug &"{conn} > {command.dbg}"
   case command.kind
   of Iam:
-    if client.challenge == "":
-      client.sendError "Authentication cannot proceed. Reconnect and try again."
+    if conn.challenge == "":
+      conn.sendError "Authentication cannot proceed. Reconnect and try again."
     try:
-      crypto_sign_verify_detached(command.iam_pubkey.string, client.challenge, command.iam_signature)
+      crypto_sign_verify_detached(command.iam_pubkey.string, conn.challenge, command.iam_signature)
     except:
-      client.challenge = "" # disable authentication
-      client.sendError "Invalid signature"
+      conn.challenge = "" # disable authentication
+      conn.sendError "Invalid signature"
       return
-    client.pubkey = command.iam_pubkey
-    relay.db.exec(sql"UPDATE clients SET pubkey = ? WHERE client_id = ?",
-      [dbValue(client.pubkey.string), dbValue(src)])
-    client.sendEvent(RelayEvent(
+    conn.pubkey = command.iam_pubkey
+    TODO "Handle the case where there's already a pubkey in here"
+    relay.conns[conn.pubkey] = conn
+    conn.sendEvent(RelayEvent(
       kind: Authenticated,
     ))
-    # # Check for pending knocks
-    # for row in relay.db.getAllRows(sql"""SELECT
-    #       a.client_id
-    #     FROM
-    #       pending_conns as p
-    #       left join clients as a
-    #         on p.src_pk = a.pubkey
-    #     WHERE
-    #       p.dst_pk = ?
-    #   """, [dbValue(client.pubkey.string)]):
-    #   let alice_id = row[0].i.int
-    #   var alice = relay.clients[alice_id]
-    #   debug &"<knck {alice} -> {client}"
-    #   client.sendEvent(RelayEvent(kind: Knock, knock_pubkey: alice.pubkey))
   of Connect:
-    if client.pubkey.string == "":
-      client.sendError "Connection forbidden"
-    elif command.conn_pubkey.string == client.pubkey.string:
-      client.sendError "Can't connect to self"
+    if conn.pubkey.string == "":
+      conn.sendError "Connection forbidden"
+    elif command.conn_pubkey.string == conn.pubkey.string:
+      conn.sendError "Can't connect to self"
     else:
-      # info &">conn {client} -> " & encode(command.conn_pubkey.string)
-      relay.addConnRequest(src, command.conn_pubkey)
+      relay.addConnRequest(conn.pubkey, command.conn_pubkey)
   of Disconnect:
-    if command.dcon_id notin client.connections:
-      client.sendError "No such connection"
+    if command.dcon_pubkey notin conn.peer_connections:
+      conn.sendError "No such connection"
     else:
-      var other = relay.clients[command.dcon_id]
-      client.disconnect(other)
-      other.disconnect(client)
+      TODO "Handle the missing key case here"
+      var other = relay.conns[command.dcon_pubkey]
+      # disassociate
+      other.peer_connections.excl(conn.pubkey)
+      conn.peer_connections.excl(other.pubkey)
+      # notify
+      conn.sendEvent(RelayEvent(
+        kind: Disconnected,
+        dcon_pubkey: other.pubkey,
+      ))
+      other.sendEvent(RelayEvent(
+        kind: Disconnected,
+        dcon_pubkey: conn.pubkey,
+      ))
   of SendData:
-    if client.pubkey.string == "":
-      client.sendError "Sending forbidden"
-    elif command.send_id notin client.connections:
-      client.sendError "No such connection"
+    if conn.pubkey.string == "":
+      conn.sendError "Sending forbidden"
+    elif command.dest_pubkey notin conn.peer_connections:
+      conn.sendError "No such connection"
     else:
-      let remote = relay.clients[command.send_id]
+      TODO "Handle the missing key case here"
+      let remote = relay.conns[command.dest_pubkey]
       remote.sendEvent(RelayEvent(
         kind: Data,
-        sender_id: src,
+        sender_pubkey: conn.pubkey,
         data: command.send_data,
       ))
 
-template sendData*(relay: var Relay, from_id: int, to_id: int, data: string) =
-  relay.handleCommand(from_id, RelayCommand(kind: SendData, send_data: data, send_id: to_id))
-
-proc add*[T](relay: var Relay[T], client: T): int =
-  ## Add a new client to the Relay, initiating authentication
-  ## Returns the client id
-  var wrap = newWrap[T](client)
-  wrap.client_id = relay.nextid
-  relay.nextid.inc()
-  wrap.challenge = randombytes(32)
-  relay.db.exec(sql"INSERT INTO clients (client_id) VALUES (?)", [dbValue(wrap.client_id)])
-  TODO "Protect against overwriting existing values in .clients"
-  relay.clients[wrap.client_id] = wrap
-  wrap.sendEvent(RelayEvent(
-    kind: Who,
-    who_challenge: wrap.challenge,
-  ))
-  result = wrap.client_id
-
-proc removeClient*[T](relay: var Relay[T], client_id: int): bool =
-  ## Remove a client from the relay if it exists.
-  ## Returns true if it was removed, false if it wasn't there
-  ## to begin with.
-  var client: ClientWrap[T]
-  result = relay.clients.pop(client_id, client)
-  if result:
-    relay.db.exec(sql"DELETE FROM pending_conns WHERE src_pk = ? OR dst_pk = ?",
-      [dbValue(client.pubkey.string), dbValue(client.pubkey.string)])
-    for other_id in client.connections:
-      var other = relay.clients[other_id]
-      client.disconnect(other)
+proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
+  ## Remove a conn from the relay if it exists.
+  TODO "Handle socket disconnections gracefully"
+  relay.conn_requests.del(conn.pubkey)
+  # disconnect all peer connections
+  var commands: seq[RelayCommand]
+  for other_pubkey in conn.peer_connections:
+    commands.add(RelayCommand(
+      kind: Disconnect,
+      dcon_pubkey: other_pubkey,
+    ))
+  for command in commands:
+    relay.handleCommand(conn, command)
+  # remove it from the registry
+  relay.conns.del(conn.pubkey)
 
 #------------------------------------------------------------
 # utilities

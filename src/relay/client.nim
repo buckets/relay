@@ -84,12 +84,12 @@ proc connect*(client: RelayClient, pubkey: PublicKey) =
     )
   )))
 
-proc send*(client: RelayClient, client_id: int, data: string) =
+proc sendData*(client: RelayClient, dest_pubkey: PublicKey, data: string) =
   ## Send data to a connection through the relay
   asyncCheck client.ws.send(nsencode(dumps(
     RelayCommand(
       kind: SendData,
       send_data: data,
-      send_id: client_id,
+      dest_pubkey: dest_pubkey,
     )
   )))
