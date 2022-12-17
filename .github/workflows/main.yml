@@ -1,0 +1,28 @@
+on:
+  pull_request:
+  push:
+
+jobs:
+  tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        version:
+          - binary:stable
+        os:
+          - ubuntu-latest
+          - macOS-latest
+    steps:
+    - uses: actions/checkout@v1
+    - uses: iffy/install-nim@v4
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        version: ${{ matrix.version }}
+    - name: Install
+      run: nimble install -y
+    - name: Run tests
+      run: nimble test
+    - name: Command-line tests
+      run: |
+        echo 'foobar' | buckets_relay adduser me@me.com --password-stdin

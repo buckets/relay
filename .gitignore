@@ -1,0 +1,7 @@
+# ignore extensionless files
+*
+!/**/
+!*.*
+buckets_relay.sqlite
+*.public
+*.secret
