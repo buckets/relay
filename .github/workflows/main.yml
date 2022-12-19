@@ -11,7 +11,7 @@ jobs:
           - binary:stable
         os:
           - ubuntu-latest
-          - macOS-latest
+          # - macOS-latest
     steps:
     - uses: actions/checkout@v1
     - uses: iffy/install-nim@v4

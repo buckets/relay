@@ -38,14 +38,19 @@ proc popEvent(client: ClientHandler, k: EventKind): Future[RelayEvent] {.async, 
     else:
       await sleepAsync(10)
 
+proc verified_user(rs: RelayServer, email: string, password = ""): int64 =
+  result = rs.register_user(email, password)
+  let token = rs.generate_email_verification_token(result)
+  assert rs.use_email_verification_token(result, token) == true
+
 test "basic":
   withinTmpDir:
     var server = newRelayServer("data.sqlite")
     let running = server.start(initTAddress("127.0.0.1", 9001))
     defer:
       running.close()
-    let user1 = server.register_user("alice", "password")
-    let user2 = server.register_user("bob", "password")
+    let user1 = server.verified_user("alice", "password")
+    let user2 = server.verified_user("bob", "password")
 
     var c1h = newClientHandler()
     var keys1 = genkeys()
