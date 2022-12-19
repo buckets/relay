@@ -3,9 +3,9 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
-import unittest
-import asyncdispatch
-import strutils
+import std/unittest
+import std/strutils
+
 import ./util
 
 import relay/client
@@ -15,7 +15,7 @@ type
   ClientHandler = ref object
     events: seq[RelayEvent]
 
-proc handleEvent(handler: ClientHandler, ev: RelayEvent, remote: RelayClient) =
+proc handleEvent(handler: ClientHandler, ev: RelayEvent, remote: RelayClient) {.async.} =
   handler.events.add(ev)
 
 proc newClientHandler(): ClientHandler =
@@ -41,29 +41,31 @@ proc popEvent(client: ClientHandler, k: EventKind): Future[RelayEvent] {.async, 
 test "basic":
   withinTmpDir:
     var server = newRelayServer("data.sqlite")
-    server.listen(9001.Port, address="127.0.0.1")
+    let running = server.start(initTAddress("127.0.0.1", 9001))
+    defer:
+      running.close()
     let user1 = server.register_user("alice", "password")
     let user2 = server.register_user("bob", "password")
 
     var c1h = newClientHandler()
     var keys1 = genkeys()
     var client1 = newRelayClient(keys1, c1h, "alice", "password")
-    waitFor client1.dial("ws://127.0.0.1:9001/relay")
+    waitFor client1.connect("ws://127.0.0.1:9001/relay")
 
     var c2h = newClientHandler()
     var keys2 = genkeys()
     var client2 = newRelayClient(keys2, c2h, "bob", "password")
-    waitFor client2.dial("ws://127.0.0.1:9001/relay")
+    waitFor client2.connect("ws://127.0.0.1:9001/relay")
 
-    client1.connect(keys2.pk)
-    client2.connect(keys1.pk)
+    waitFor client1.connect(keys2.pk)
+    waitFor client2.connect(keys1.pk)
 
     var atob = (waitFor c1h.popEvent(Connected)).conn_pubkey
     var btoa = (waitFor c2h.popEvent(Connected)).conn_pubkey
     check atob.string != ""
     check btoa.string != ""
     
-    client1.sendData(atob, "hello")
+    waitFor client1.sendData(atob, "hello")
     check (waitFor c2h.popEvent(Data)).data == "hello"
-    client2.sendData(btoa, "a".repeat(4096))
+    waitFor client2.sendData(btoa, "a".repeat(4096))
     check (waitFor c1h.popEvent(Data)).data == "a".repeat(4096)

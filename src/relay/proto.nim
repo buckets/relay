@@ -73,9 +73,6 @@ type
       send_data*: string
       dest_pubkey*: PublicKey
   
-  # RelayClient = concept rc
-  #   rc.sendEvent(RelayEvent)
-  
   RelayConnection*[T] = ref object
     challenge: string
     pubkey*: PublicKey
@@ -107,7 +104,7 @@ proc abbr*(a: PublicKey): string =
 proc `$`*(conn: RelayConnection): string =
   result.add "[RConn "
   if conn.pubkey.string == "":
-    result.add "------"
+    result.add "----------"
   else:
     result.add conn.pubkey.abbr
   result.add "]"

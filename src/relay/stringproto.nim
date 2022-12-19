@@ -5,7 +5,7 @@
 
 import strutils
 import ./proto
-import protocols/netstring
+import ./netstring
 
 proc dumps*(ev: RelayEvent): string =
   ## Serialize a RelayEvent to a string. Opposite of loadsRelayEvent

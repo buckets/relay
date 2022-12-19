@@ -3,25 +3,29 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
-import std/asyncdispatch
-import std/asynchttpserver
 import std/logging
 import std/options
 import std/strutils
 import std/base64
 
-import ../vend/ws/ws
-import protocols/netstring
+import chronos
+import websock/websock
+import websock/extensions/compression/deflate
+import chronicles
+import stew/byteutils
+import httputils
+
 import ndb/sqlite
 import libsodium/sodium
 
+import ./netstring
 import ./proto
 import ./stringproto
 import ./dbschema
 
 type
   WSClient = ref object
-    ws: WebSocket
+    ws: WSSession
     user_id: int64
     relayserver: RelayServer
 
@@ -30,12 +34,21 @@ type
     dbfilename: string
     userdb: Option[DbConn]
 
-# proc sendEvent*(c: WSClient, ev: RelayEvent)
-
 proc newRelayServer*(dbfilename: string): RelayServer =
   new(result)
   result.relay = newRelay[WSClient]()
   result.dbfilename = dbfilename
+
+#-------------------------------------------------------------
+# netstrings
+#-------------------------------------------------------------
+const
+  COLONCHAR = ':'
+  TERMINALCHAR = ','
+  DEFAULTMAXLEN = 1_000_000
+
+proc nsencode*(msg:string, terminalChar = TERMINALCHAR):string {.inline.} =
+  $msg.len & COLONCHAR & msg & terminalChar
 
 #-------------------------------------------------------------
 # User management
@@ -116,7 +129,7 @@ proc generate_email_verification_token*(rs: RelayServer, user_id: int64): string
   ## Generate a string to be emailed to a user that when returned
   ## to `use_email_verification_token` will mark that user's email
   ## as verified.
-  let token = randombytes(3).encodeBase16
+  let token = randombytes(3).toHex()
   rs.db.exec(sql"UPDATE user SET emailtoken=? WHERE id=?", token, user_id)
   return token
 
@@ -272,20 +285,21 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
 #-------------------------------------------------------------
 
 proc sendEvent*(c: WSClient, ev: RelayEvent) =
-  let msg = nsencode(dumps(ev))
-  c.relayserver.log_user_data_recv(c.user_id, msg.len)
-  asyncCheck c.ws.send(msg)
+  if not c.ws.isNil:
+    let msg = nsencode(dumps(ev))
+    c.relayserver.log_user_data_recv(c.user_id, msg.len)
+    asyncCheck c.ws.send(msg.toBytes, Opcode.Binary)
 
-proc newWSClient(rs: RelayServer, ws: WebSocket, user_id: int64): WSClient =
+proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64): WSClient =
   new(result)
   result.ws = ws
   result.relayserver = rs
   result.user_id = user_id
 
-proc authenticate*(rs: RelayServer, req: Request): int64 =
+proc authenticate*(rs: RelayServer, req: HttpRequest): int64 =
   ## Perform HTTP basic authentication and return the
   ## user id if correct.
-  let authorization = req.headers.getOrDefault("authorization")
+  let authorization = req.headers.getString("authorization")
   let parts = authorization.strip().split(" ")
   doAssert parts.len == 2, "Authorization header should have 2 items"
   doAssert parts[0] == "Basic", "Only basic HTTP auth is supported"
@@ -296,46 +310,95 @@ proc authenticate*(rs: RelayServer, req: Request): int64 =
     password = credentials[1]
   return rs.password_auth(username, password)
 
-proc handleRequest*(rs: RelayServer, req: Request) {.async, gcsafe.} =
-  ## Handle a relay server websocket request.  See `proc listen` for
-  ## an example of how to use this.
+proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+  ## Handle a relay server websocket request.
   let user_id = block:
     try:
       # Perform HTTP basic authenciation
       rs.authenticate(req)
     except:
-      await req.respond(Http403, "Forbidden")
+      # XXX
+      TODO "Handle failed authentication"
+      # await req.respond(Http403, "Forbidden")
       return
+  var relayconn: RelayConnection[WSClient]
   try:
     # Upgrade protocol to websockets
-    var ws = await newWebSocket(req)
+    let deflateFactory = deflateFactory()
+    let server = WSServer.new(factories = [deflateFactory])
+    var ws = await server.handleRequest(req)
+    if ws.readyState != Open:
+      raise ValueError.newException("Failed to open websocket connection")
+
     var wsclient = newWSClient(rs, ws, user_id)
-    var relayconn = rs.relay.initAuth(wsclient)
-    var decoder = newNetstringDecoder()
-    while ws.readyState == Open:
-      let packet = await ws.receiveStrPacket()
-      rs.log_user_data_sent(user_id, packet.len)
-      decoder.consume(packet)
-      while decoder.hasMessage():
-        let cmd = loadsRelayCommand(decoder.nextMessage())
-        # echo "server: cmd: ", $cmd
-        rs.relay.handleCommand(relayconn, cmd)
-    rs.relay.removeConnection(relayconn)
-  except WebSocketError:
-    error "server: socket closed: " & getCurrentExceptionMsg()
-    await req.respond(Http400, "Bad request")
+    try:
+      relayconn = rs.relay.initAuth(wsclient)
+      var decoder = newNetstringDecoder()
+      while ws.readyState != ReadyState.Closed:
+        let buff = await ws.recvMsg()
+        if buff.len == 0:
+          TODO "Do we need to do anything if we receive 0 bytes?"
+        rs.log_user_data_sent(user_id, buff.len)
+        decoder.consume(string.fromBytes(buff))
+        while decoder.hasMessage():
+          let cmd = loadsRelayCommand(decoder.nextMessage())
+          rs.relay.handleCommand(relayconn, cmd)
+    except:
+      wsclient.ws = nil
+      raise
+  except WSClosedError:
+    discard
+  except WebSocketError as exc:
+    error "relay/server: WebSocketError: " & exc.msg
+    # await req.respond(Http400, "Bad request")
+    
+    TODO "Handle websocketerror"
   except:
     error "client failed to connect: " & getCurrentExceptionMsg()
-    await req.respond(Http400, "Bad request")
+    TODO "Handle other errors"
+    # await req.respond(Http400, "Bad request")
+  finally:
+    rs.relay.removeConnection(relayconn)
 
-proc listen*(rs: RelayServer, port = 9001.Port, address = "") =
-  ## Start the default relay server on the given port.
-  var server = newAsyncHttpServer()
-  proc cb(req: Request) {.async, gcsafe.} =
-    if req.url.path == "/relay":
-      await rs.handleRequest(req)
+
+# proc handle(request: HttpRequest) {.async.} =
+#   try:
+#     let deflateFactory = deflateFactory()
+#     let server = WSServer.new(factories = [deflateFactory])
+#     let ws = await server.handleRequest(request)
+#     if ws.readyState != Open:
+#       error "Failed to open websocket connection"
+#       return
+#     while ws.readyState != ReadyState.Closed:
+#       debug "relay/server: waiting to receive data ..."
+#       let recvData = await ws.recvMsg()
+#       rs.log_user_data_sent(user_id, packet.len)
+#       if ws.readyState == ReadyState.Closed:
+#         # if session already terminated by peer,
+#         # no need to send response
+#         break
+
+#       debug "relay/server: sending data ..."
+#       await ws.send(recvData,
+#         if ws.binary: Opcode.Binary else: Opcode.Text)
+
+#   except WebSocketError as exc:
+#     error "WebSocket error: " & exc.msg
+
+proc start*(rs: RelayServer, address: TransportAddress): auto =
+  ## Start the relay server at the given address.
+  let
+    socketFlags = {ServerFlags.TcpNoDelay, ServerFlags.ReuseAddr}
+    server = when defined tls:
+      TlsHttpServer.create(
+        address = address,
+        tlsPrivateKey = TLSPrivateKey.init(SecureKey),
+        tlsCertificate = TLSCertificate.init(SecureCert),
+        flags = socketFlags)
     else:
-      await req.respond(Http404, "Not found")
-  asyncCheck server.serve(port, cb, address = address)
+      HttpServer.create(address, flags = socketFlags)
 
-
+  server.handler = proc(request: HttpRequest) {.async.} =
+    await rs.handleRequest(request)
+  server.start()
+  return server
