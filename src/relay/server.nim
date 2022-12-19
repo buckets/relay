@@ -3,30 +3,30 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
+import chronicles
+import chronos
+import httputils
+import libsodium/sodium
+import ndb/sqlite
+import std/base64
 import std/logging
 import std/options
+import std/strformat
 import std/strutils
-import std/base64
-
-import chronos
-import websock/websock
-import websock/extensions/compression/deflate
-import chronicles
 import stew/byteutils
-import httputils
+import websock/extensions/compression/deflate
+import websock/websock
 
-import ndb/sqlite
-import libsodium/sodium
-
+import ./dbschema
 import ./netstring
 import ./proto
 import ./stringproto
-import ./dbschema
 
 type
   WSClient = ref object
     ws: WSSession
     user_id: int64
+    ip: string
     relayserver: RelayServer
 
   RelayServer* = ref object
@@ -288,13 +288,15 @@ proc sendEvent*(c: WSClient, ev: RelayEvent) =
   if not c.ws.isNil:
     let msg = nsencode(dumps(ev))
     c.relayserver.log_user_data_recv(c.user_id, msg.len)
+    c.relayserver.log_ip_data_recv(c.ip, msg.len)
     asyncCheck c.ws.send(msg.toBytes, Opcode.Binary)
 
-proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64): WSClient =
+proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WSClient =
   new(result)
   result.ws = ws
   result.relayserver = rs
   result.user_id = user_id
+  result.ip = ip
 
 proc authenticate*(rs: RelayServer, req: HttpRequest): int64 =
   ## Perform HTTP basic authentication and return the
@@ -310,6 +312,22 @@ proc authenticate*(rs: RelayServer, req: HttpRequest): int64 =
     password = credentials[1]
   return rs.password_auth(username, password)
 
+proc ipAddress(request: HttpRequest): string =
+  ## Return the IP Address associated with this request
+  # # Forwarded (TODO)
+  # let forwarded = request.headers.getOrDefault("forwarded")
+  # if forwarded != "":
+  #   return result
+  # True-Client-IP (cloudflare)
+  result = request.headers.getString("true-client-ip")
+  if result != "":
+    return result
+  # X-Real-IP (nginx)
+  result = request.headers.getString("x-real-ip")
+  if result != "":
+    return result
+  result = request.stream.writer.tsource.remoteAddress().host()
+  
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
   let user_id = block:
@@ -317,10 +335,13 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
       # Perform HTTP basic authenciation
       rs.authenticate(req)
     except:
-      # XXX
-      TODO "Handle failed authentication"
-      # await req.respond(Http403, "Forbidden")
+      await req.stream.writer.sendError(Http403)
       return
+  if not rs.can_use_relay(user_id):
+    info &"User {user_id} blocked from using relay"
+    await req.stream.writer.sendError(Http403)
+    return
+  let ip = req.ipAddress()
   var relayconn: RelayConnection[WSClient]
   try:
     # Upgrade protocol to websockets
@@ -330,15 +351,14 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     if ws.readyState != Open:
       raise ValueError.newException("Failed to open websocket connection")
 
-    var wsclient = newWSClient(rs, ws, user_id)
+    var wsclient = newWSClient(rs, ws, user_id, ip)
     try:
       relayconn = rs.relay.initAuth(wsclient)
       var decoder = newNetstringDecoder()
       while ws.readyState != ReadyState.Closed:
         let buff = await ws.recvMsg()
-        if buff.len == 0:
-          TODO "Do we need to do anything if we receive 0 bytes?"
         rs.log_user_data_sent(user_id, buff.len)
+        rs.log_ip_data_sent(ip, buff.len)
         decoder.consume(string.fromBytes(buff))
         while decoder.hasMessage():
           let cmd = loadsRelayCommand(decoder.nextMessage())
@@ -350,40 +370,12 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     discard
   except WebSocketError as exc:
     error "relay/server: WebSocketError: " & exc.msg
-    # await req.respond(Http400, "Bad request")
-    
-    TODO "Handle websocketerror"
+    await req.stream.writer.sendError(Http400)
   except:
     error "client failed to connect: " & getCurrentExceptionMsg()
-    TODO "Handle other errors"
-    # await req.respond(Http400, "Bad request")
+    await req.stream.writer.sendError(Http400)
   finally:
     rs.relay.removeConnection(relayconn)
-
-
-# proc handle(request: HttpRequest) {.async.} =
-#   try:
-#     let deflateFactory = deflateFactory()
-#     let server = WSServer.new(factories = [deflateFactory])
-#     let ws = await server.handleRequest(request)
-#     if ws.readyState != Open:
-#       error "Failed to open websocket connection"
-#       return
-#     while ws.readyState != ReadyState.Closed:
-#       debug "relay/server: waiting to receive data ..."
-#       let recvData = await ws.recvMsg()
-#       rs.log_user_data_sent(user_id, packet.len)
-#       if ws.readyState == ReadyState.Closed:
-#         # if session already terminated by peer,
-#         # no need to send response
-#         break
-
-#       debug "relay/server: sending data ..."
-#       await ws.send(recvData,
-#         if ws.binary: Opcode.Binary else: Opcode.Text)
-
-#   except WebSocketError as exc:
-#     error "WebSocket error: " & exc.msg
 
 proc start*(rs: RelayServer, address: TransportAddress): auto =
   ## Start the relay server at the given address.

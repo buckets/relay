@@ -50,7 +50,7 @@ proc stats(dbfilename: string, days = 30): JsonNode =
   #   result.add &"| {row.data.sent} | {row.data.recv} | {row.user} |\n"
   # result.add "\nTop IPs:\n"
   for row in rs.top_data_ips(20, days = days):
-    result.add(%* {
+    result["ips"].add(%* {
       "sent": row.data.sent,
       "recv": row.data.recv,
       "ip": row.ip,

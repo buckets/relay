@@ -25,14 +25,5 @@ jobs:
       run: nimble test
     - name: Command-line tests
       run: |
-        printf 'foobar' | brelay adduser me@me.com --password-stdin
-        brelay stats
-        brelay server &
-        CHILDPID=$!
-        trap "kill $CHILDPID" exit
-        (mkdir client1 && cd client1 && bclient genkeys)
-        (mkdir client2 && cd client2 && bclient genkeys)
-        echo "hello, world" > testfile
-        (cd client1 && bclient recv -u me@me.com -p foobar http://127.0.0.1:9001 "$(cat ../client2/relay.key.public)" > output) &
-        (cd client2 && cat testfile | bclient send -u me@me.com -p foobar http://127.0.0.1:9001 "$(cat ../client1/relay.key.public)")
-        cat output
+        tests/func1.sh
+        

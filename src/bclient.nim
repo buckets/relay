@@ -59,6 +59,7 @@ proc relaySend*(data: string, topubkey: PublicKey, relayurl: string, mykeys: Key
   await client.connect(topubkey)
   await sh.sent
   await client.disconnect()
+  await client.done
 
 proc relayReceive*(frompubkey: PublicKey, relayurl: string, mykeys: KeyPair, username: string, password: string): Future[string] {.async.} =
   debug &"Receiving from {frompubkey} via {relayurl} ..."
@@ -68,6 +69,7 @@ proc relayReceive*(frompubkey: PublicKey, relayurl: string, mykeys: KeyPair, use
   await client.connect(frompubkey)
   result = await rh.data
   await client.disconnect()
+  await client.done
 
   
 when isMainModule:

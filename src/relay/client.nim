@@ -24,6 +24,7 @@ type
     handler: T
     username: string
     password: string
+    done*: Future[void]
 
 proc newRelayClient*[T](keys: KeyPair, handler: T, username, password: string): RelayClient[T] =
   new(result)
@@ -31,6 +32,7 @@ proc newRelayClient*[T](keys: KeyPair, handler: T, username, password: string): 
   result.handler = handler
   result.username = username
   result.password = password
+  result.done = newFuture[void]("newRelayClient done")
 
 proc ws*(client: RelayClient): WSSession =
   if client.wsopt.isSome:
@@ -41,19 +43,22 @@ proc ws*(client: RelayClient): WSSession =
 proc send*(ws: WSSession, cmd: RelayCommand) {.async.} =
   await ws.send(nsencode(dumps(cmd)).toBytes, Opcode.Binary)
 
-proc loop(client: RelayClient, authenticated: Future[void]) {.async.} =
+proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.async.} =
   var decoder = newNetstringDecoder()
   if client.wsopt.isSome():
     let ws = client.ws
     while ws.readyState != ReadyState.Closed:
-      let buff = await ws.recvMsg()
+      let buff = try:
+          await ws.recvMsg()
+        except:
+          break
       if buff.len <= 0:
-        TODO "How to handle 0 bytes?"
         break
       let data = string.fromBytes(buff)
       decoder.consume(data)
       while decoder.hasMessage():
         let ev = loadsRelayEvent(decoder.nextMessage())
+        debug "client recv: " & ev.dbg
         case ev.kind
         of Who:
           await ws.send(RelayCommand(
@@ -66,7 +71,7 @@ proc loop(client: RelayClient, authenticated: Future[void]) {.async.} =
         else:
           discard
         await client.handler.handleEvent(ev, client)
-  TODO "Handle end of loop"
+    await ws.close()
 
 proc authHeaderHook*(username, password: string): Hook =
   ## Create a websock connection hook that adds Basic HTTP authentication
@@ -98,8 +103,7 @@ proc connect*(client: RelayClient, url: string) {.async.} =
       )
   client.wsopt = some(ws)
   var authenticated = newFuture[void]("relay.client.dial.authenticated")
-  asyncCheck client.loop(authenticated)
-  TODO "when it's time, close the loop and close the websocket"
+  client.done = client.loop(authenticated)
   await authenticated
 
 proc connect*(client: RelayClient, pubkey: PublicKey) {.async.} =

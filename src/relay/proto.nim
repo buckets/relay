@@ -16,7 +16,8 @@ import libsodium/sodium
 import ndb/sqlite
 
 template TODO*(msg: string) =
-  when defined(release): {.error: msg .}
+  when defined(release):
+    {.error: msg .}
 
 type
   PublicKey* = distinct string
@@ -35,6 +36,10 @@ type
     Data = "d"
     ErrorEvent = "E"
   
+  ErrorCode* = enum
+    Generic = 0
+    DestNotPresent
+  
   ## Relay events -- server to client message
   RelayEvent* = object
     case kind*: EventKind
@@ -50,6 +55,7 @@ type
       data*: string
       sender_pubkey*: PublicKey
     of ErrorEvent:
+      err_code*: ErrorCode
       err_message*: string
 
   ## Relay command types
@@ -243,6 +249,22 @@ proc addConnRequest(relay: var Relay, alice_pubkey: PublicKey, bob_pubkey: Publi
     # that he wants to connect yet.
     relay.conn_requests.mgetOrPut(alice_pubkey, @[]).add(bob_pubkey)
 
+proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
+  ## Remove a conn from the relay if it exists.
+  if conn.pubkey in relay.conn_requests:
+    relay.conn_requests.del(conn.pubkey)
+  # disconnect all peer connections
+  var commands: seq[RelayCommand]
+  for other_pubkey in conn.peer_connections:
+    commands.add(RelayCommand(
+      kind: Disconnect,
+      dcon_pubkey: other_pubkey,
+    ))
+  for command in commands:
+    relay.handleCommand(conn, command)
+  # remove it from the registry
+  relay.conns.del(conn.pubkey)
+
 proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: RelayCommand) =
   debug &"{conn} > {command.dbg}"
   case command.kind
@@ -256,7 +278,9 @@ proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: R
       conn.sendError "Invalid signature"
       return
     conn.pubkey = command.iam_pubkey
-    TODO "Handle the case where there's already a pubkey in here"
+    if conn.pubkey in relay.conns:
+      # this pubkey is already connected; boot the old conn
+      relay.removeConnection(relay.conns[conn.pubkey])
     relay.conns[conn.pubkey] = conn
     conn.sendEvent(RelayEvent(
       kind: Authenticated,
@@ -272,49 +296,38 @@ proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: R
     if command.dcon_pubkey notin conn.peer_connections:
       conn.sendError "No such connection"
     else:
-      TODO "Handle the missing key case here"
-      var other = relay.conns[command.dcon_pubkey]
-      # disassociate
-      other.peer_connections.excl(conn.pubkey)
-      conn.peer_connections.excl(other.pubkey)
-      # notify
-      conn.sendEvent(RelayEvent(
-        kind: Disconnected,
-        dcon_pubkey: other.pubkey,
-      ))
-      other.sendEvent(RelayEvent(
-        kind: Disconnected,
-        dcon_pubkey: conn.pubkey,
-      ))
+      if command.dcon_pubkey in relay.conns:
+        var other = relay.conns[command.dcon_pubkey]
+        # disassociate
+        other.peer_connections.excl(conn.pubkey)
+        conn.peer_connections.excl(other.pubkey)
+        # notify
+        conn.sendEvent(RelayEvent(
+          kind: Disconnected,
+          dcon_pubkey: other.pubkey,
+        ))
+        other.sendEvent(RelayEvent(
+          kind: Disconnected,
+          dcon_pubkey: conn.pubkey,
+        ))
   of SendData:
     if conn.pubkey.string == "":
       conn.sendError "Sending forbidden"
     elif command.dest_pubkey notin conn.peer_connections:
       conn.sendError "No such connection"
     else:
-      TODO "Handle the missing key case here"
-      let remote = relay.conns[command.dest_pubkey]
-      remote.sendEvent(RelayEvent(
-        kind: Data,
-        sender_pubkey: conn.pubkey,
-        data: command.send_data,
-      ))
-
-proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
-  ## Remove a conn from the relay if it exists.
-  TODO "Handle socket disconnections gracefully"
-  relay.conn_requests.del(conn.pubkey)
-  # disconnect all peer connections
-  var commands: seq[RelayCommand]
-  for other_pubkey in conn.peer_connections:
-    commands.add(RelayCommand(
-      kind: Disconnect,
-      dcon_pubkey: other_pubkey,
-    ))
-  for command in commands:
-    relay.handleCommand(conn, command)
-  # remove it from the registry
-  relay.conns.del(conn.pubkey)
+      if command.dest_pubkey notin relay.conns:
+        conn.sendEvent(RelayEvent(
+          kind: ErrorEvent,
+          err_message: "Other side disconnected",
+        ))
+      else:
+        let remote = relay.conns[command.dest_pubkey]
+        remote.sendEvent(RelayEvent(
+          kind: Data,
+          sender_pubkey: conn.pubkey,
+          data: command.send_data,
+        ))
 
 #------------------------------------------------------------
 # utilities
