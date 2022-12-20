@@ -29,10 +29,53 @@ type
     ip: string
     relayserver: RelayServer
 
+  RelayHttpServer = ref object
+    case tls: bool
+    of true:
+      httpsServer: TlsHttpServer
+    of false:
+      httpServer: HttpServer
+
   RelayServer* = ref object
     relay: Relay[WSClient]
     dbfilename: string
     userdb: Option[DbConn]
+    http: RelayHttpServer
+
+proc start*(rhs: RelayHttpServer) =
+  case rhs.tls
+  of true:
+    rhs.httpsServer.start()
+  of false:
+    rhs.httpServer.start()
+
+proc stop*(rhs: RelayHttpServer) =
+  case rhs.tls
+  of true:
+    rhs.httpsServer.stop()
+  of false:
+    rhs.httpServer.stop()
+
+proc close*(rhs: RelayHttpServer) =
+  case rhs.tls
+  of true:
+    rhs.httpsServer.close()
+  of false:
+    rhs.httpServer.close()
+
+proc join*(rhs: RelayHttpServer): Future[void] =
+  case rhs.tls
+  of true:
+    rhs.httpsServer.join()
+  of false:
+    rhs.httpServer.join()
+
+proc `handler=`*(rhs: RelayHttpServer, handler: HttpAsyncCallback) =
+  case rhs.tls
+  of true:
+    rhs.httpsServer.handler = handler
+  of false:
+    rhs.httpServer.handler = handler
 
 proc newRelayServer*(dbfilename: string): RelayServer =
   new(result)
@@ -327,9 +370,16 @@ proc ipAddress(request: HttpRequest): string =
   if result != "":
     return result
   result = request.stream.writer.tsource.remoteAddress().host()
-  
+
+when defined(testmode):
+  var allHttpRequests*: seq[HttpRequest]
+
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
+  when defined(testmode):
+    allHttpRequests.add(req)
+    defer:
+      allHttpRequests.delete(allHttpRequests.find(req))
   let user_id = block:
     try:
       # Perform HTTP basic authenciation
@@ -356,41 +406,55 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
       relayconn = rs.relay.initAuth(wsclient)
       var decoder = newNetstringDecoder()
       while ws.readyState != ReadyState.Closed:
-        let buff = await ws.recvMsg()
+        let buff = try:
+            await ws.recvMsg()
+          except:
+            break
         rs.log_user_data_sent(user_id, buff.len)
         rs.log_ip_data_sent(ip, buff.len)
         decoder.consume(string.fromBytes(buff))
         while decoder.hasMessage():
           let cmd = loadsRelayCommand(decoder.nextMessage())
           rs.relay.handleCommand(relayconn, cmd)
-    except:
+    finally:
       wsclient.ws = nil
-      raise
   except WSClosedError:
-    discard
+    debug "relay/server: ws closed"
   except WebSocketError as exc:
     error "relay/server: WebSocketError: " & exc.msg
     await req.stream.writer.sendError(Http400)
-  except:
-    error "client failed to connect: " & getCurrentExceptionMsg()
+  except Exception as exc:
+    error "relay/server: connection failed: " & exc.msg
     await req.stream.writer.sendError(Http400)
   finally:
-    rs.relay.removeConnection(relayconn)
+    if not relayconn.isNil:
+      rs.relay.removeConnection(relayconn)
 
-proc start*(rs: RelayServer, address: TransportAddress): auto =
+proc start*(rs: RelayServer, address: TransportAddress) =
   ## Start the relay server at the given address.
   let
     socketFlags = {ServerFlags.TcpNoDelay, ServerFlags.ReuseAddr}
-    server = when defined tls:
-      TlsHttpServer.create(
+  when defined tls:
+    rs.http = RelayHttpServer(
+      tls: true,
+      httpsServer: TlsHttpServer.create(
         address = address,
         tlsPrivateKey = TLSPrivateKey.init(SecureKey),
         tlsCertificate = TLSCertificate.init(SecureCert),
         flags = socketFlags)
-    else:
-      HttpServer.create(address, flags = socketFlags)
+    )
+  else:
+    rs.http = RelayHttpServer(
+      tls: false,
+      httpServer: HttpServer.create(address, flags = socketFlags),
+    )
 
-  server.handler = proc(request: HttpRequest) {.async.} =
+  rs.http.handler = proc(request: HttpRequest) {.async.} =
     await rs.handleRequest(request)
-  server.start()
-  return server
+  rs.http.start()
+
+proc finish*(rs: RelayServer) {.async.} =
+  ## Completely stop the running server
+  rs.http.stop()
+  rs.http.close()
+  await rs.http.join()

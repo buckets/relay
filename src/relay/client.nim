@@ -25,6 +25,23 @@ type
     username: string
     password: string
     done*: Future[void]
+  
+  ClientLifeEventKind* = enum
+    ConnectedToServer
+    LocalError
+    DisconnectedFromServer
+  
+  ClientLifeEvent* = ref object
+    case kind*: ClientLifeEventKind
+    of ConnectedToServer:
+      discard
+    of LocalError:
+      discard
+    of DisconnectedFromServer:
+      discard
+  
+  RelayErrLoginFailed* = RelayErr
+  RelayNotConnected* = RelayErr
 
 proc newRelayClient*[T](keys: KeyPair, handler: T, username, password: string): RelayClient[T] =
   new(result)
@@ -38,9 +55,9 @@ proc ws*(client: RelayClient): WSSession =
   if client.wsopt.isSome:
     client.wsopt.get()
   else:
-    raise ValueError.newException("No websocket")
+    raise RelayNotConnected.newException("Not connected")
 
-proc send*(ws: WSSession, cmd: RelayCommand) {.async.} =
+proc send(ws: WSSession, cmd: RelayCommand) {.async.} =
   await ws.send(nsencode(dumps(cmd)).toBytes, Opcode.Binary)
 
 proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.async.} =
@@ -50,7 +67,10 @@ proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.asyn
     while ws.readyState != ReadyState.Closed:
       let buff = try:
           await ws.recvMsg()
-        except:
+        except Exception as exc:
+          await client.handler.handleLifeEvent(ClientLifeEvent(
+            kind: DisconnectedFromServer,
+          ), client)
           break
       if buff.len <= 0:
         break
@@ -71,7 +91,12 @@ proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.asyn
         else:
           discard
         await client.handler.handleEvent(ev, client)
+    client.wsopt = none[WSSession]()
     await ws.close()
+    await client.handler.handleLifeEvent(ClientLifeEvent(
+      kind: DisconnectedFromServer,
+    ), client)
+
 
 proc authHeaderHook*(username, password: string): Hook =
   ## Create a websock connection hook that adds Basic HTTP authentication
@@ -87,41 +112,61 @@ proc connect*(client: RelayClient, url: string) {.async.} =
     uri = parseUri(url)
     address = (uri.hostname & ":" & $uri.port)
     authheaders = authHeaderHook(client.username, client.password)
-  let ws = when defined tls:
-      await WebSocket.connect(
-        address,
-        path = uri.path,
-        secure = true,
-        flags = {TLSFlags.NoVerifyHost, TLSFlags.NoVerifyServerName},
-        hooks = @[authheaders],
-      )
+  try:
+    let ws = when defined tls:
+        await WebSocket.connect(
+          address,
+          path = uri.path,
+          secure = true,
+          flags = {TLSFlags.NoVerifyHost, TLSFlags.NoVerifyServerName},
+          hooks = @[authheaders],
+        )
+      else:
+        await WebSocket.connect(
+          address,
+          path = uri.path,
+          hooks = @[authheaders],
+        )
+    client.wsopt = some(ws)
+  except WebSocketError as exc:
+    let msg = getCurrentExceptionMsg()
+    if "403" in msg and "Forbidden" in msg:
+      raise RelayErrLoginFailed.newException("Failed initial authentication")
     else:
-      await WebSocket.connect(
-        address,
-        path = uri.path,
-        hooks = @[authheaders],
-      )
-  client.wsopt = some(ws)
+      raise exc
+  await client.handler.handleLifeEvent(ClientLifeEvent(
+    kind: ConnectedToServer,
+  ), client)
   var authenticated = newFuture[void]("relay.client.dial.authenticated")
   client.done = client.loop(authenticated)
   await authenticated
 
-proc connect*(client: RelayClient, pubkey: PublicKey) {.async.} =
+proc connect*(client: RelayClient, pubkey: PublicKey) {.async, raises: [RelayNotConnected].} =
   ## Initiate a connection through the relay to the given public key
   await client.ws.send(RelayCommand(
-      kind: Connect,
-      conn_pubkey: pubkey,
-    ))
+    kind: Connect,
+    conn_pubkey: pubkey,
+  ))
 
-proc sendData*(client: RelayClient, dest_pubkey: PublicKey, data: string) {.async.} =
+proc sendData*(client: RelayClient, dest_pubkey: PublicKey, data: string) {.async, raises: [RelayNotConnected].} =
   ## Send data to a connection through the relay
   await client.ws.send(RelayCommand(
-      kind: SendData,
-      send_data: data,
-      dest_pubkey: dest_pubkey,
-    ))
+    kind: SendData,
+    send_data: data,
+    dest_pubkey: dest_pubkey,
+  ))
 
 proc disconnect*(client: RelayClient) {.async.} =
   ## Disconnect this client from the network
   if client.wsopt.isSome:
-    await client.ws.close()
+    await client.wsopt.get().close()
+    client.wsopt = none[WSSession]()
+
+proc disconnect*(client: RelayClient, dest_pubkey: PublicKey) {.async.} =
+  ## Disconnect this client from a remote client
+  if client.wsopt.isSome:
+    await client.wsopt.get().send(RelayCommand(
+      kind: Disconnect,
+      dcon_pubkey: dest_pubkey,
+    ))
+  

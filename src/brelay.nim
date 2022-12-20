@@ -11,13 +11,13 @@ import chronos
 
 import relay/server
 
-proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): auto =
+proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): RelayServer =
   ## Start the relay server on the given port.
-  var rs = newRelayServer(dbfilename)
+  result = newRelayServer(dbfilename)
   let taddress = initTAddress(address, port.int)
   info &"Starting Buckets Relay on {taddress} ..."
   stderr.flushFile
-  return rs.start(taddress)
+  result.start(taddress)
   # var httpserver = newAsyncHttpServer()
   # proc cb(req: Request) {.async, gcsafe.} =
   #   if req.url.path == "/":

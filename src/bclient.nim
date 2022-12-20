@@ -33,6 +33,10 @@ proc handleEvent(handler: SendHandler, ev: RelayEvent, remote: RelayClient) {.as
   else:
     discard
 
+proc handleLifeEvent(handler: SendHandler, ev: ClientLifeEvent, remote: RelayClient) {.async.} =
+  discard
+
+
 type
   RecvHandler = ref object
     buf: string
@@ -50,6 +54,9 @@ proc handleEvent(handler: RecvHandler, ev: RelayEvent, remote: RelayClient) {.as
     handler.data.complete(handler.buf)
   else:
     discard
+
+proc handleLifeEvent(handler: RecvHandler, ev: ClientLifeEvent, remote: RelayClient) {.async.} =
+  discard
 
 proc relaySend*(data: string, topubkey: PublicKey, relayurl: string, mykeys: KeyPair, username: string, password: string): Future[void] {.async.} =
   debug &"Sending {data.len} bytes to {topubkey} via {relayurl} ..."

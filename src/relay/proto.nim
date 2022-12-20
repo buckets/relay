@@ -36,6 +36,7 @@ type
     Data = "d"
     ErrorEvent = "E"
   
+  ## RelayEvent error types
   ErrorCode* = enum
     Generic = 0
     DestNotPresent
@@ -89,6 +90,8 @@ type
     conns: TableRef[PublicKey, RelayConnection[T]]
     conn_requests: TableRef[PublicKey, seq[PublicKey]]
     db: DbConn
+  
+  RelayErr* = object of CatchableError
 
 proc newRelay*[T](): Relay[T] =
   new(result)
@@ -263,7 +266,8 @@ proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
   for command in commands:
     relay.handleCommand(conn, command)
   # remove it from the registry
-  relay.conns.del(conn.pubkey)
+  if conn.pubkey in relay.conns:
+    relay.conns.del(conn.pubkey)
 
 proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: RelayCommand) =
   debug &"{conn} > {command.dbg}"
