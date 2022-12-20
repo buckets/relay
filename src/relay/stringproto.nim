@@ -5,7 +5,7 @@
 
 import strutils
 import ./proto
-import protocols/netstring
+import ./netstring
 
 proc dumps*(ev: RelayEvent): string =
   ## Serialize a RelayEvent to a string. Opposite of loadsRelayEvent
@@ -23,6 +23,7 @@ proc dumps*(ev: RelayEvent): string =
     result.add nsencode($ev.sender_pubkey.string)
     result.add nsencode(ev.data)
   of ErrorEvent:
+    result.add nsencode($ev.err_code)
     result.add nsencode(ev.err_message)
 
 proc loadsRelayEvent*(msg: string): RelayEvent =
@@ -53,6 +54,7 @@ proc loadsRelayEvent*(msg: string): RelayEvent =
     result.sender_pubkey = decoder.nextMessage().PublicKey
     result.data = decoder.nextMessage()
   of ErrorEvent:
+    result.err_code = parseEnum[ErrorCode](decoder.nextMessage())
     result.err_message = decoder.nextMessage()
 
 proc dumps*(cmd: RelayCommand): string =

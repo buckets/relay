@@ -3,36 +3,36 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
-import std/asyncdispatch
-import std/asynchttpserver
 import std/logging
 import std/strformat
 import std/json
 
+import chronos
+
 import relay/server
 
-proc main(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): Future[void] =
+proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): RelayServer =
   ## Start the relay server on the given port.
-  newConsoleLogger(lvlAll, useStderr = true).addHandler()
-  var rs = newRelayServer(dbfilename)
-  info &"Starting Buckets Relay on {address}:{port.int} ..."
+  result = newRelayServer(dbfilename)
+  let taddress = initTAddress(address, port.int)
+  info &"Starting Buckets Relay on {taddress} ..."
   stderr.flushFile
-  var httpserver = newAsyncHttpServer()
-  proc cb(req: Request) {.async, gcsafe.} =
-    if req.url.path == "/":
-      await req.respond(Http200, "Buckets Relay\nVersion X")
-    elif req.url.path == "/relay":
-      await rs.handleRequest(req)
-    else:
-      await req.respond(Http404, "Not found")
-  httpserver.serve(port, cb, address = address)
+  result.start(taddress)
+  # var httpserver = newAsyncHttpServer()
+  # proc cb(req: Request) {.async, gcsafe.} =
+  #   if req.url.path == "/":
+  #     await req.respond(Http200, "Buckets Relay\nVersion X")
+  #   elif req.url.path == "/relay":
+  #     await rs.handleRequest(req)
+  #   else:
+  #     await req.respond(Http404, "Not found")
+  # httpserver.serve(port, cb, address = address)
 
-proc addverifieduser(dbfilename, username, password: string) =
+proc addverifieduser*(dbfilename, username, password: string) =
   var rs = newRelayServer(dbfilename)
   let userid = rs.register_user(username, password)
   let token = rs.generate_email_verification_token(userid)
   doAssert rs.use_email_verification_token(userid, token) == true
-  echo "added user"
 
 proc stats(dbfilename: string, days = 30): JsonNode =
   result = %* {
@@ -50,7 +50,7 @@ proc stats(dbfilename: string, days = 30): JsonNode =
   #   result.add &"| {row.data.sent} | {row.data.recv} | {row.user} |\n"
   # result.add "\nTop IPs:\n"
   for row in rs.top_data_ips(20, days = days):
-    result.add(%* {
+    result["ips"].add(%* {
       "sent": row.data.sent,
       "recv": row.data.recv,
       "ip": row.ip,
@@ -70,6 +70,7 @@ else:
   
 when isMainModule:
   import argparse
+  newConsoleLogger(lvlAll, useStderr = true).addHandler()
   var p = newParser:
     option("-d", "--database", help="User/stats database filename", default=some("buckets_relay.sqlite"))
     command("adduser"):
@@ -85,6 +86,7 @@ when isMainModule:
           else:
             $getpass("Password? ".cstring)
         addverifieduser(opts.parentOpts.database, username, password)
+        echo "added user ", username
     command("stats"):
       help("Show some statistics")
       option("--days", help = "Show data for this number of days", default=some("30"))
@@ -95,7 +97,8 @@ when isMainModule:
       option("-p", "--port", help="Port to run server on", default=some("9001"))
       option("-a", "--address", help="Address to run on", default=some("127.0.0.1"))
       run:
-        waitFor main(opts.parentOpts.database, opts.port.parseInt.Port, opts.address)
+        var server = startRelay(opts.parentOpts.database, opts.port.parseInt.Port, opts.address)
+        runForever()
   try:
     p.run()
   except UsageError:

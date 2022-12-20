@@ -4,10 +4,10 @@
 # For a copy, see LICENSE.md in this repository.
 
 import std/unittest
-import std/asyncdispatch
 import std/strutils
-
 import ./util
+
+import chronos
 
 import relay/server
 

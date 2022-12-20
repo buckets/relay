@@ -5,3 +5,4 @@
 buckets_relay.sqlite
 *.public
 *.secret
+_tests
