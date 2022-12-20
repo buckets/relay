@@ -3,16 +3,21 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
+import std/base64
+import std/logging
+import std/options
+import std/os
+import std/strformat
+import std/strutils
+import std/tables
+import std/mimetypes
+
 import chronicles
 import chronos
 import httputils
 import libsodium/sodium
+import mustache
 import ndb/sqlite
-import std/base64
-import std/logging
-import std/options
-import std/strformat
-import std/strutils
 import stew/byteutils
 import websock/extensions/compression/deflate
 import websock/websock
@@ -41,6 +46,53 @@ type
     dbfilename: string
     userdb: Option[DbConn]
     http: RelayHttpServer
+    mcontext*: proc(): mustache.Context
+
+const
+  partialsDir = currentSourcePath.parentDir.parentDir / "partials"
+  staticDir = currentSourcePath.parentDir.parentDir / "static"
+
+var mimedb = newMimetypes()
+
+when defined(release) or defined(embedassets):
+  # embed templates and static data
+  const partialsData = static:
+    var tab = initTable[string, string]()
+    echo "Embedding templates from ", partialsDir
+    for item in walkDir(partialsDir):
+      if item.kind == pcFile:
+        let
+          parts = item.path.splitFile
+          name = parts.name
+        echo " + ", name, ": ", item.path
+        tab[name] = slurp(item.path)
+    tab
+  proc addDefaultContext*(c: var Context) =
+    c.searchTable(partialsData)
+  
+  const staticData = static:
+    var tab = initTable[string, string]()
+    echo "Embedding static data from ", staticDir
+    for item in walkDir(staticDir):
+      if item.kind == pcFile:
+        let name = item.path.extractFilename
+        echo " + ", name, ": ", item.path
+        tab[name] = slurp(item.path)
+    tab
+  
+  template readStaticFile(path: string): string =
+    staticData[path]
+else:
+  # read templates and static data from disk
+  proc addDefaultContext*(c: var Context) =
+    c.searchDirs(@[partialsDir])
+  
+  proc readStaticFile(path: string): string =
+    let fullpath = normalizedPath(staticDir / path)
+    if fullpath.isRelativeTo(staticDir) and fullpath.fileExists():
+      readFile(fullpath)
+    else:
+      raise KeyError.newException("No such file: " & path)
 
 proc start*(rhs: RelayHttpServer) =
   case rhs.tls
@@ -81,6 +133,9 @@ proc newRelayServer*(dbfilename: string): RelayServer =
   new(result)
   result.relay = newRelay[WSClient]()
   result.dbfilename = dbfilename
+  result.mcontext = proc(): Context =
+    result = newContext()
+    result.addDefaultContext()
 
 #-------------------------------------------------------------
 # netstrings
@@ -374,27 +429,23 @@ proc ipAddress(request: HttpRequest): string =
 when defined(testmode):
   var allHttpRequests*: seq[HttpRequest]
 
-proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
-  ## Handle a relay server websocket request.
-  when defined(testmode):
-    allHttpRequests.add(req)
-    defer:
-      allHttpRequests.delete(allHttpRequests.find(req))
+proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+  # Perform HTTP basic authenciation
   let user_id = block:
     try:
-      # Perform HTTP basic authenciation
       rs.authenticate(req)
     except:
-      await req.stream.writer.sendError(Http403)
+      await req.sendError(Http403)
       return
   if not rs.can_use_relay(user_id):
     info &"User {user_id} blocked from using relay"
-    await req.stream.writer.sendError(Http403)
+    await req.sendError(Http403)
     return
   let ip = req.ipAddress()
+
+  # Upgrade protocol to websockets
   var relayconn: RelayConnection[WSClient]
   try:
-    # Upgrade protocol to websockets
     let deflateFactory = deflateFactory()
     let server = WSServer.new(factories = [deflateFactory])
     var ws = await server.handleRequest(req)
@@ -422,13 +473,42 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     debug "relay/server: ws closed"
   except WebSocketError as exc:
     error "relay/server: WebSocketError: " & exc.msg
-    await req.stream.writer.sendError(Http400)
+    await req.sendError(Http400)
   except Exception as exc:
     error "relay/server: connection failed: " & exc.msg
-    await req.stream.writer.sendError(Http400)
+    await req.sendError(Http400)
   finally:
     if not relayconn.isNil:
       rs.relay.removeConnection(relayconn)
+
+proc sendHTML*(req: HttpRequest, data: string) {.async.} =
+  var headers = HttpTable.init()
+  headers.add("Content-Type", "text/html")
+  await req.sendResponse(Http200, headers, data = data)
+
+proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+  ## Handle a relay server websocket request.
+  echo "Got request", $req.uri
+  when defined(testmode):
+    allHttpRequests.add(req)
+    defer:
+      allHttpRequests.delete(allHttpRequests.find(req))
+  let path = req.uri.path
+  if path == "/relay":
+    await rs.handleRequestRelay(req)
+  elif path == "/":
+    let ctx = rs.mcontext()
+    await req.sendHTML(render("{{>index}}", rs.mcontext()))
+  elif path.startsWith("/static"):
+    let subpath = path.substr("/static".len)
+    try:
+      var headers = HttpTable.init()
+      headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
+      await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
+    except:
+      await req.sendError(Http404)
+  else:
+    await req.sendError(Http404)
 
 proc start*(rs: RelayServer, address: TransportAddress) =
   ## Start the relay server at the given address.

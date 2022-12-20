@@ -1,0 +1,91 @@
+<html>
+  <head>
+    <title>Buckets Relay</title>
+    <link rel="shortcut icon" href=/static/favicon.png type=image/png>
+    <style>
+    * {
+      font-family: Lato, sans-serif;
+    }
+    body {
+      background-color: rgba(41, 156, 237, 1.0);
+      background-color: rgba(52, 73, 94,1.0);
+    }
+    p {
+      text-align: left;
+    }
+    .card {
+      background-color: white;
+      margin: 2rem auto;
+      width: 40rem;
+      border-radius: 4px;
+      padding: 2rem;
+    }
+    form {
+      text-align: left;
+    }
+    label {
+      display: block;
+    }
+    h1 {
+      margin-top: 0;
+    }
+    h1,h2,h3,h4,h5 {
+      color: #34495e;
+    }
+    button {
+      margin-top: 1rem;
+    }
+    .box {
+      border: 1px solid rgba(52, 73, 94,1.0);
+      padding: 1rem;
+      border-radius: 4px;
+      margin: 1rem auto;
+    }
+    .box h2 {
+      margin-top: 0;
+    }
+    </style>
+  </head>
+  <body style="text-align: center;">
+    <div class="card">
+      <h1>
+        <img src="/static/favicon.png" style="vertical-align: middle;">
+        <span>Buckets Relay Server</span>
+      </h1>
+
+      <p>
+        This relay server is for use with the <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a> budgeting app to allow you to share budget data among your devices.
+        Use of this server may be revoked at any time for any reason.
+      </p>
+
+      <form method="post" action="/register" class="box">
+        <h2>Register</h2>
+        <div>
+          <label>Email address</label>
+          <input type="email">
+        </div>
+
+        <div>
+          <label>Password</label>
+          <input type="password">
+        </div>
+
+        <button>Register</button>
+      </form>
+
+      <form method="post" action="/reset-password" class="box">
+        <h2>Forgot Password</h2>
+        <div>
+          <label>Email address</label>
+          <input type="email" name="email">
+        </div>
+
+        <button>Reset password</button>
+      </form>
+
+      <p>
+        This server is <a href="https://github.com/buckets/relay" target="_blank">Open Source</a> if you'd like to run your own instance.
+      </p>
+    </div>
+  </body>
+</html>
