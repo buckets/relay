@@ -26,3 +26,12 @@ template withinTmpDir*(body:untyped):untyped =
     tmp.removeDir()
   except:
     echo "WARNING: failed to remove temporary test directory: ", getCurrentExceptionMsg()
+
+template cd*(dirname: string, body: untyped): untyped =
+  let olddir = getCurrentDir()
+  try:
+    createDir(dirname)
+    setCurrentDir(dirname)
+    body
+  finally:
+    setCurrentDir(olddir)

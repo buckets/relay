@@ -11,7 +11,7 @@ jobs:
           - binary:stable
         os:
           - ubuntu-latest
-          - macOS-latest
+          # - macOS-latest
     steps:
     - uses: actions/checkout@v1
     - uses: iffy/install-nim@v4
@@ -25,4 +25,5 @@ jobs:
       run: nimble test
     - name: Command-line tests
       run: |
-        echo 'foobar' | buckets_relay adduser me@me.com --password-stdin
+        tests/func1.sh
+        

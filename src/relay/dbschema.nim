@@ -11,8 +11,6 @@ type
 
 proc upgradeSchema*(db:DbConn, patches:openArray[Patch]) =
     ## Apply database patches to this file
-    logging.info "(dbpatch) start"
-    
     # See what patches have already been applied
     db.exec(sql"""
     CREATE TABLE IF NOT EXISTS _schema_version (
@@ -41,4 +39,3 @@ proc upgradeSchema*(db:DbConn, patches:openArray[Patch]) =
             logging.error &"(dbpatch) error applying patch {patch.name}: {getCurrentExceptionMsg()}"
             db.exec(sql"ROLLBACK")
             raise
-    logging.info "(dbpatch) end"
