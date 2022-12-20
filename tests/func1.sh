@@ -10,14 +10,14 @@ dotest() {
   echo "hello, world" > testfile
 
   echo "Starting the server ..."
-  brelay server &
+  brelay server --port 8080 &
   CHILDPID=$!
   trap "kill $CHILDPID" exit
 
   echo "Starting the clients ..."
   printf "hello, world" > client2/testfile
-  (cd client1 && bclient receive -u me@me.com -p foobar http://127.0.0.1:9001 "$(cat ../client2/relay.key.public)" > output) &
-  (cd client2 && cat testfile | bclient send -u me@me.com -p foobar http://127.0.0.1:9001 "$(cat ../client1/relay.key.public)")
+  (cd client1 && bclient receive -u me@me.com -p foobar http://127.0.0.1:8080 "$(cat ../client2/relay.key.public)" > output) &
+  (cd client2 && cat testfile | bclient send -u me@me.com -p foobar http://127.0.0.1:8080 "$(cat ../client1/relay.key.public)")
   cat client1/output
 
   if [ "$(cat client2/testfile)" != "$(cat client1/output)" ]; then
