@@ -26,6 +26,7 @@ dotest() {
   fi
 
   echo "Showing some stats ..."
+  echo '.timeout 1000' | sqlite3 buckets_relay.sqlite
   brelay stats
 }
 
