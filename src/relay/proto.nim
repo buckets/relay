@@ -34,6 +34,8 @@ type
     Connected = "c"
     Disconnected = "x"
     Data = "d"
+    Entered = ">"
+    Exited = "^"
     ErrorEvent = "E"
   
   ## RelayEvent error types
@@ -55,6 +57,10 @@ type
     of Data:
       data*: string
       sender_pubkey*: PublicKey
+    of Entered:
+      entered_pubkey*: PublicKey
+    of Exited:
+      exited_pubkey*: PublicKey
     of ErrorEvent:
       err_code*: ErrorCode
       err_message*: string
@@ -83,11 +89,13 @@ type
   RelayConnection*[T] = ref object
     challenge: string
     pubkey*: PublicKey
+    channel*: string
     peer_connections: HashSet[PublicKey]
     sender*: T
 
   Relay*[T] = ref object
     conns: TableRef[PublicKey, RelayConnection[T]]
+    channels: TableRef[string, HashSet[PublicKey]]
     conn_requests: TableRef[PublicKey, seq[PublicKey]]
     db: DbConn
   
@@ -96,6 +104,7 @@ type
 proc newRelay*[T](): Relay[T] =
   new(result)
   result.conns = newTable[PublicKey, RelayConnection[T]]()
+  result.channels = newTable[string, HashSet[PublicKey]]()
   result.conn_requests = newTable[PublicKey, seq[PublicKey]]()
 
 proc `$`*(a: PublicKey): string =
@@ -137,6 +146,10 @@ proc `==`*(a, b: RelayEvent): bool =
       return a.dcon_pubkey == b.dcon_pubkey
     of Data:
       return a.sender_pubkey == b.sender_pubkey and a.data == b.data
+    of Entered:
+      return a.entered_pubkey == b.entered_pubkey
+    of Exited:
+      return a.exited_pubkey == b.exited_pubkey
     of ErrorEvent:
       return a.err_message == b.err_message
 
@@ -215,11 +228,14 @@ template sendError(conn: RelayConnection, message: string) =
     err_message: message,
   ))
 
-proc initAuth*[T](relay: var Relay[T], client: T): RelayConnection[T] =
-  ## Ask the client to authenticat itself. After it succeeds, it will
+proc initAuth*[T](relay: var Relay[T], client: T, channel = ""): RelayConnection[T] =
+  ## Ask the client to authenticate itself. After it succeeds, it will
   ## be added as a connected client.
+  ## If channel is provided, this is the channel to which this client
+  ## will be subscribed for Entered/Exited events.
   var conn = newRelayConnection[T](client)
   conn.challenge = randombytes(32)
+  conn.channel = channel
   conn.sendEvent(RelayEvent(
     kind: Who,
     who_challenge: conn.challenge,
@@ -265,6 +281,15 @@ proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
     ))
   for command in commands:
     relay.handleCommand(conn, command)
+  # notify the channel (if any)
+  if conn.channel != "":
+    relay.channels.mgetOrPut(conn.channel, initHashSet[PublicKey]()).excl(conn.pubkey)
+    for other in relay.channels[conn.channel].items:
+      if other in relay.conns:
+        relay.conns[other].sendEvent(RelayEvent(
+          kind: Exited,
+          exited_pubkey: conn.pubkey,
+        ))
   # remove it from the registry
   if conn.pubkey in relay.conns:
     relay.conns.del(conn.pubkey)
@@ -289,6 +314,19 @@ proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: R
     conn.sendEvent(RelayEvent(
       kind: Authenticated,
     ))
+    if conn.channel != "":
+      relay.channels.mgetOrPut(conn.channel, initHashSet[PublicKey]()).incl(conn.pubkey)
+      for other in relay.channels[conn.channel].items:
+        if other != conn.pubkey:
+          conn.sendEvent(RelayEvent(
+            kind: Entered,
+            entered_pubkey: other,
+          ))
+          if other in relay.conns:
+            relay.conns[other].sendEvent(RelayEvent(
+              kind: Entered,
+              entered_pubkey: conn.pubkey,
+            ))
   of Connect:
     if conn.pubkey.string == "":
       conn.sendError "Connection forbidden"

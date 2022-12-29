@@ -27,6 +27,7 @@ import ./dbschema
 import ./netstring
 import ./proto
 import ./stringproto
+import ./mailer
 
 type
   WSClient = ref object
@@ -177,7 +178,6 @@ const userdbSchema = [
       email TEXT NOT NULL,
       pwhash TEXT NOT NULL,
       emailverified TINYINT DEFAULT 0,
-      emailtoken TEXT DEFAULT '',
       blocked TINYINT DEFAULT 0,
       UNIQUE(email)
     )""",
@@ -187,6 +187,13 @@ const userdbSchema = [
       bytes_sent INT DEFAULT 0,
       bytes_recv INT DEFAULT 0,
       PRIMARY KEY (day, user_id),
+      FOREIGN KEY (user_id) REFERENCES user(id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS emailtoken (
+      id INTEGER PRIMARY KEY,
+      expires TIMESTAMP DEFAULT (datetime('now', '+1 hour')),
+      user_id INTEGER NOT NULL,
+      token TEXT,
       FOREIGN KEY (user_id) REFERENCES user(id)
     )""",
     """CREATE TABLE IF NOT EXISTS pwreset (
@@ -250,17 +257,22 @@ proc generate_email_verification_token*(rs: RelayServer, user_id: int64): string
   ## Generate a string to be emailed to a user that when returned
   ## to `use_email_verification_token` will mark that user's email
   ## as verified.
-  let token = randombytes(4).toHex()
-  rs.db.exec(sql"UPDATE user SET emailtoken=? WHERE id=?", token, user_id)
-  return token
+  result = randombytes(16).toHex()
+  rs.db.exec(sql"INSERT INTO emailtoken (user_id, token) VALUES (?, ?)",
+    user_id, result)
+  rs.db.exec(sql"""DELETE FROM emailtoken WHERE id NOT IN
+    (SELECT id FROM emailtoken WHERE user_id=? ORDER BY id DESC LIMIT 3)""",
+    user_id)
 
 proc use_email_verification_token*(rs: RelayServer, user_id: int64, token: string): bool =
   ## Verify a user's email address via token. Return `true` if they are now
   ## verified and `false` if they are not.
   try:
-    let row = rs.db.getRow(sql"SELECT emailtoken FROM user WHERE id=?", user_id).get()
-    if row[0].s == token: # a constant-time compare isn't needed because tokens expire on compare
-      rs.db.exec(sql"UPDATE user SET emailverified=1, emailtoken='' WHERE id=?", user_id)
+    let row = rs.db.getRow(sql"SELECT count(*) FROM emailtoken WHERE user_id=? AND token=?",
+      user_id, token).get()
+    if row[0].i == 1:
+      rs.db.exec(sql"DELETE FROM emailtoken WHERE user_id = ?", user_id)
+      rs.db.exec(sql"UPDATE user SET emailverified=1 WHERE id=?", user_id)
   except:
     discard
   return rs.is_email_verified(user_id)
@@ -272,6 +284,9 @@ proc generate_password_reset_token*(rs: RelayServer, email: LowerString): string
   let user_id = rs.get_user_id(email)
   rs.db.exec(sql"INSERT INTO pwreset (user_id, token) VALUES (?, ?)",
     user_id, result)
+  rs.db.exec(sql"""DELETE FROM pwreset WHERE id NOT IN
+    (SELECT id FROM pwreset WHERE user_id=? ORDER BY id DESC LIMIT 3)""",
+    user_id)
 
 proc delete_old_pwreset_tokens(rs: RelayServer) =
   rs.db.exec(sql"DELETE FROM pwreset WHERE expires < datetime('now')")
@@ -498,7 +513,7 @@ proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
 
     var wsclient = newWSClient(rs, ws, user_id, ip)
     try:
-      relayconn = rs.relay.initAuth(wsclient)
+      relayconn = rs.relay.initAuth(wsclient, channel = $user_id)
       var decoder = newNetstringDecoder()
       while ws.readyState != ReadyState.Closed:
         let buff = try:
@@ -525,7 +540,7 @@ proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     if not relayconn.isNil:
       rs.relay.removeConnection(relayconn)
 
-proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async.} =
   ## Handle user registration activities
   # Upgrade protocol to websockets
   try:
@@ -549,29 +564,30 @@ proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
         let args = data["args"]
         case command
         of "register":
-          let user_id = rs.register_user(args["email"].getStr(), args["password"].getStr())
+          let email = args["email"].getStr()
+          let password = args["password"].getStr()
+          let user_id = rs.register_user(email, password)
           let email_token = rs.generate_email_verification_token(user_id)
-          TODO "Actually send email tokens"
-          echo "XXX ", email_token
+          await sendEmail(email, "Buckets Relay - Email Verification",
+            &"Use this code to verify your email address:\n\n{email_token}")
           resp["response"] = newJBool(true)
         of "sendVerify":
           let email = args["email"].getStr()
           let user_id = rs.get_user_id(email)
           let email_token = rs.generate_email_verification_token(user_id)
-          TODO "Actually send email tokens"
-          echo "XXX ", email_token
+          await sendEmail(email, "Buckets Relay - Email Verification",
+            &"Use this code to verify your email address:\n\n{email_token}")
           resp["response"] = newJBool(true)
         of "verify":
           let email = args["email"].getStr()
           let code = args["code"].getStr()
-          echo "XXX ", email, " ", code
           let user_id = rs.get_user_id(email)
           resp["response"] = newJBool(rs.use_email_verification_token(user_id, code))
         of "resetPassword":
           let email = args["email"].getStr()
           let pw_token = rs.generate_password_reset_token(email)
-          TODO "Actually send password token"
-          echo "XXX ", pw_token
+          await sendEmail(email, "Buckets Relay - Password Reset",
+            &"Use this code to change your password:\n\n{pw_token}")
         of "updatePassword":
           let pw_token = args["token"].getStr()
           let new_password = args["new_password"].getStr()
@@ -584,8 +600,9 @@ proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
         resp["error"] = newJString("Account already exists")
       except WrongPassword:
         resp["error"] = newJString("Wrong password")
-      except:
+      except Exception as exc:
         resp["error"] = newJString("Unexpected error")
+        error exc.msg
       finally:
         await ws.send($resp)
   except WSClosedError:
@@ -604,7 +621,6 @@ proc sendHTML*(req: HttpRequest, data: string) {.async.} =
 
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
-  echo "Got request: ", $req.uri
   when defined(testmode):
     allHttpRequests.add(req)
     defer:

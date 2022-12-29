@@ -46,14 +46,14 @@ proc popEvent(conn: RelayConnection[StringClient]): RelayEvent =
 proc popEvent(conn: RelayConnection[StringClient], kind: EventKind): RelayEvent =
   conn.sender.popEvent(kind)
 
-proc mkConnection(relay: var Relay, keys = none[KeyPair]()): RelayConnection[StringClient] =
+proc mkConnection(relay: var Relay, keys = none[KeyPair](), channel = ""): RelayConnection[StringClient] =
   var keys = keys
   if keys.isNone:
     keys = some(genkeys())
   var client = newClient()
   client.pk = keys.get().pk
   client.sk = keys.get().sk
-  var conn = relay.initAuth(client)
+  var conn = relay.initAuth(client, channel = channel)
   let who = client.popEvent()
   let signature = sign(client.sk, who.who_challenge)
   relay.handleCommand(conn, RelayCommand(kind: Iam, iam_signature: signature, iam_pubkey: client.pk))
@@ -170,7 +170,6 @@ test "send data to invalid id":
   discard alice.popEvent(ErrorEvent)
   relay.sendData(alice, alice.pubkey, "feedback")
   discard alice.popEvent(ErrorEvent)
-  
 
 test "send data to unconnected id":
   var relay = newRelay[StringClient]()
@@ -219,3 +218,18 @@ test "disconnect command":
   relay.handleCommand(alice, RelayCommand(kind: Disconnect, dcon_pubkey: bob.pubkey))
   check bob.popEvent(Disconnected).dcon_pubkey == alice.pubkey
   check alice.popEvent(Disconnected).dcon_pubkey == bob.pubkey
+
+test "pub/sub":
+  var relay = newRelay[StringClient]()
+  var alice = relay.mkConnection(channel = "alicenbob")
+  var bob = relay.mkConnection(channel = "alicenbob")
+  block:
+    let ev = alice.popEvent(Entered)
+    check ev.entered_pubkey == bob.pubkey
+  block:
+    let ev = bob.popEvent(Entered)
+    check ev.entered_pubkey == alice.pubkey
+  relay.removeConnection(alice)
+  block:
+    let ev = bob.popEvent(Exited)
+    check ev.exited_pubkey == alice.pubkey

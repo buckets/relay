@@ -6,7 +6,7 @@ description   = "The relay service for the Buckets budgeting app"
 license       = "MIT"
 srcDir        = "src"
 installExt    = @["nim"]
-installDirs   = @["src/partials", "src/static"]
+installDirs   = @["partials", "static"]
 bin           = @["brelay", "bclient"]
 
 

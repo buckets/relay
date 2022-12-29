@@ -22,6 +22,10 @@ proc dumps*(ev: RelayEvent): string =
   of Data:
     result.add nsencode($ev.sender_pubkey.string)
     result.add nsencode(ev.data)
+  of Entered:
+    result.add nsencode(ev.entered_pubkey.string)
+  of Exited:
+    result.add nsencode(ev.exited_pubkey.string)
   of ErrorEvent:
     result.add nsencode($ev.err_code)
     result.add nsencode(ev.err_message)
@@ -34,6 +38,8 @@ proc loadsRelayEvent*(msg: string): RelayEvent =
     of $Connected: Connected
     of $Disconnected: Disconnected
     of $Data: Data
+    of $Entered: Entered
+    of $Exited: Exited
     of $ErrorEvent: ErrorEvent
     else:
       raise ValueError.newException("Unknown event type: " & msg[0])
@@ -53,6 +59,10 @@ proc loadsRelayEvent*(msg: string): RelayEvent =
   of Data:
     result.sender_pubkey = decoder.nextMessage().PublicKey
     result.data = decoder.nextMessage()
+  of Entered:
+    result.entered_pubkey = decoder.nextMessage().PublicKey
+  of Exited:
+    result.exited_pubkey = decoder.nextMessage().PublicKey
   of ErrorEvent:
     result.err_code = parseEnum[ErrorCode](decoder.nextMessage())
     result.err_message = decoder.nextMessage()

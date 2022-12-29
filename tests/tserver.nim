@@ -34,19 +34,21 @@ test "duplicate users not allowed":
     expect DuplicateUser:
       discard rs.register_user("foo", "another")
 
-test "email verification only works once":
+test "email verification only 5 latest codes work":
   withinTmpDir:
     var rs = newRelayServer("test.db")
     let uid = rs.register_user("foo", "password")
     let t1 = rs.generate_email_verification_token(uid)
+    discard rs.generate_email_verification_token(uid)
+    let t3 = rs.generate_email_verification_token(uid)
+    discard rs.generate_email_verification_token(uid)
     check rs.use_email_verification_token(uid, "invalid token") == false
     check rs.is_email_verified(uid) == false
 
-    check rs.use_email_verification_token(uid, t1) == false # this is false, because the token verification failed
+    check rs.use_email_verification_token(uid, t1) == false # failed because only 5 are valid
     check rs.is_email_verified(uid) == false
 
-    let t2 = rs.generate_email_verification_token(uid)
-    check rs.use_email_verification_token(uid, t2) == true
+    check rs.use_email_verification_token(uid, t3) == true
     check rs.is_email_verified(uid) == true
 
 proc verified_user(rs: RelayServer, email: string, password = ""): int64 =
