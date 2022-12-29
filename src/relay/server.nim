@@ -4,13 +4,14 @@
 # For a copy, see LICENSE.md in this repository.
 
 import std/base64
+import std/json
 import std/logging
-import std/options
+import std/mimetypes
+import std/options; export options
 import std/os
 import std/strformat
 import std/strutils
 import std/tables
-import std/mimetypes
 
 import chronicles
 import chronos
@@ -47,6 +48,10 @@ type
     userdb: Option[DbConn]
     http: RelayHttpServer
     mcontext*: proc(): mustache.Context
+
+  NotFound* = object of CatchableError
+  WrongPassword* = object of CatchableError
+  DuplicateUser* = object of CatchableError
 
 const
   partialsDir = currentSourcePath.parentDir.parentDir / "partials"
@@ -92,7 +97,7 @@ else:
     if fullpath.isRelativeTo(staticDir) and fullpath.fileExists():
       readFile(fullpath)
     else:
-      raise KeyError.newException("No such file: " & path)
+      raise NotFound.newException("No such file: " & path)
 
 proc start*(rhs: RelayHttpServer) =
   case rhs.tls
@@ -173,7 +178,8 @@ const userdbSchema = [
       pwhash TEXT NOT NULL,
       emailverified TINYINT DEFAULT 0,
       emailtoken TEXT DEFAULT '',
-      blocked TINYINT DEFAULT 0
+      blocked TINYINT DEFAULT 0,
+      UNIQUE(email)
     )""",
     """CREATE TABLE IF NOT EXISTS userlog (
       day TEXT NOT NULL,
@@ -181,7 +187,14 @@ const userdbSchema = [
       bytes_sent INT DEFAULT 0,
       bytes_recv INT DEFAULT 0,
       PRIMARY KEY (day, user_id),
-      FOREIGN KEY(user_id) REFERENCES user(id)
+      FOREIGN KEY (user_id) REFERENCES user(id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS pwreset (
+      id INTEGER PRIMARY KEY,
+      expires TIMESTAMP DEFAULT (datetime('now', '+1 hour')),
+      user_id INTEGER NOT NULL,
+      token TEXT,
+      FOREIGN KEY (user_id) REFERENCES user(id)
     )""",
   ])
 ]
@@ -198,24 +211,34 @@ proc db*(rs: RelayServer): DbConn =
     rs.userdb = some(db)
   rs.userdb.get()
 
+proc get_user_id*(rs: RelayServer, email: LowerString): int64 =
+  ## Get a user's id from their email
+  try:
+    rs.db.getRow(sql"SELECT id FROM user WHERE email=?", email).get()[0].i
+  except:
+    raise NotFound.newException("No such user")
+
 proc register_user*(rs: RelayServer, email: LowerString, password: string): int64 =
   ## Register a user with a password
   let pwhash = crypto_pwhash_str(password)
-  result = rs.db.insertID(sql"INSERT INTO user (email, pwhash) VALUES (?,?)",
-    email, pwhash)
+  try:
+    result = rs.db.insertID(sql"INSERT INTO user (email, pwhash) VALUES (?,?)",
+      email, pwhash)
+  except:
+    raise DuplicateUser.newException("Account already exists")
 
 proc password_auth*(rs: RelayServer, email: LowerString, password: string): int64 =
   ## Return the userid if the password is correct, else raise an exception
   let orow = rs.db.getRow(sql"SELECT id, pwhash FROM user WHERE email = ?", email)
   if orow.isNone:
-    raise ValueError.newException("No such user")
+    raise NotFound.newException("No such user")
   else:
     let row = orow.get()
     let user_id = row[0].i
     let pwhash = row[1].s
     if crypto_pwhash_str_verify(pwhash, password):
       return user_id
-  raise ValueError.newException("Wrong password")
+  raise WrongPassword.newException("Wrong password")
 
 proc is_email_verified*(rs: RelayServer, user_id: int64): bool =
   ## Return true if the user has verified their email address
@@ -227,7 +250,7 @@ proc generate_email_verification_token*(rs: RelayServer, user_id: int64): string
   ## Generate a string to be emailed to a user that when returned
   ## to `use_email_verification_token` will mark that user's email
   ## as verified.
-  let token = randombytes(3).toHex()
+  let token = randombytes(4).toHex()
   rs.db.exec(sql"UPDATE user SET emailtoken=? WHERE id=?", token, user_id)
   return token
 
@@ -237,19 +260,40 @@ proc use_email_verification_token*(rs: RelayServer, user_id: int64, token: strin
   try:
     let row = rs.db.getRow(sql"SELECT emailtoken FROM user WHERE id=?", user_id).get()
     if row[0].s == token: # a constant-time compare isn't needed because tokens expire on compare
-      rs.db.exec(sql"UPDATE user SET emailverified=1 WHERE id=?", user_id)
+      rs.db.exec(sql"UPDATE user SET emailverified=1, emailtoken='' WHERE id=?", user_id)
   except:
     discard
-  finally:
-    rs.db.exec(sql"UPDATE user SET emailtoken='' WHERE id=?", user_id)
   return rs.is_email_verified(user_id)
 
-proc userid*(rs: RelayServer, email: LowerString): int64 =
-  ## Get a user's id from their email
+proc generate_password_reset_token*(rs: RelayServer, email: LowerString): string =
+  ## Generate a string token to be emailed to a user that can be used
+  ## to set their password.
+  result = randombytes(16).toHex()
+  let user_id = rs.get_user_id(email)
+  rs.db.exec(sql"INSERT INTO pwreset (user_id, token) VALUES (?, ?)",
+    user_id, result)
+
+proc delete_old_pwreset_tokens(rs: RelayServer) =
+  rs.db.exec(sql"DELETE FROM pwreset WHERE expires < datetime('now')")
+
+proc user_for_password_reset_token*(rs: RelayServer, token: string): Option[int64] =
+  ## Get the user associated with a password reset token, if one exists.
+  rs.delete_old_pwreset_tokens()
   try:
-    rs.db.getRow(sql"SELECT id FROM user WHERE email=?", email).get()[0].i
+    let row = rs.db.getRow(sql"SELECT user_id FROM pwreset WHERE token = ?", token).get()
+    return some(row[0].i)
   except:
-    raise ValueError.newException("No such user")
+    discard
+
+proc update_password_with_token*(rs: RelayServer, token: string, newpassword: string) =
+  ## Update a user's password using a password-reset token
+  let o_user_id = rs.user_for_password_reset_token(token)
+  if o_user_id.isNone:
+    raise NotFound.newException("Invalid token")
+  let user_id = o_user_id.get()
+  let pwhash = crypto_pwhash_str(newpassword)
+  rs.db.exec(sql"DELETE FROM pwreset WHERE user_id = ?", user_id)
+  rs.db.exec(sql"UPDATE user SET pwhash=? WHERE id=?", pwhash, user_id)
 
 proc block_user*(rs: RelayServer, user_id: int64) =
   ## Block a user's access to the relay
@@ -257,7 +301,7 @@ proc block_user*(rs: RelayServer, user_id: int64) =
 
 proc block_user*(rs: RelayServer, email: LowerString) =
   ## Block a user's access to the relay
-  rs.block_user(rs.userid(email))
+  rs.block_user(rs.get_user_id(email))
 
 proc unblock_user*(rs: RelayServer, user_id: int64) =
   ## Unblock a user's access to the relay
@@ -265,7 +309,7 @@ proc unblock_user*(rs: RelayServer, user_id: int64) =
 
 proc unblock_user*(rs: RelayServer, email: LowerString) =
   ## Unblock a user's access to the relay
-  rs.unblock_user(rs.userid(email))
+  rs.unblock_user(rs.get_user_id(email))
 
 proc can_use_relay*(rs: RelayServer, user_id: int64): bool =
   ## Return true if the user is allowed to use the relay
@@ -481,6 +525,78 @@ proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     if not relayconn.isNil:
       rs.relay.removeConnection(relayconn)
 
+proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+  ## Handle user registration activities
+  # Upgrade protocol to websockets
+  try:
+    let deflateFactory = deflateFactory()
+    let server = WSServer.new(factories = [deflateFactory])
+    var ws = await server.handleRequest(req)
+    if ws.readyState != Open:
+      raise ValueError.newException("Failed to open websocket connection")
+
+    while ws.readyState != ReadyState.Closed:
+      let buff = try:
+          await ws.recvMsg()
+        except:
+          break
+      let msg = string.fromBytes(buff)
+      let data = parseJson(msg)
+      var resp = newJObject()
+      resp["id"] = data["id"]
+      try:
+        let command = data["command"].getStr()
+        let args = data["args"]
+        case command
+        of "register":
+          let user_id = rs.register_user(args["email"].getStr(), args["password"].getStr())
+          let email_token = rs.generate_email_verification_token(user_id)
+          TODO "Actually send email tokens"
+          echo "XXX ", email_token
+          resp["response"] = newJBool(true)
+        of "sendVerify":
+          let email = args["email"].getStr()
+          let user_id = rs.get_user_id(email)
+          let email_token = rs.generate_email_verification_token(user_id)
+          TODO "Actually send email tokens"
+          echo "XXX ", email_token
+          resp["response"] = newJBool(true)
+        of "verify":
+          let email = args["email"].getStr()
+          let code = args["code"].getStr()
+          echo "XXX ", email, " ", code
+          let user_id = rs.get_user_id(email)
+          resp["response"] = newJBool(rs.use_email_verification_token(user_id, code))
+        of "resetPassword":
+          let email = args["email"].getStr()
+          let pw_token = rs.generate_password_reset_token(email)
+          TODO "Actually send password token"
+          echo "XXX ", pw_token
+        of "updatePassword":
+          let pw_token = args["token"].getStr()
+          let new_password = args["new_password"].getStr()
+          rs.update_password_with_token(pw_token, new_password)
+        else:
+          resp["error"] = newJString("Unknown command");
+      except NotFound:
+        resp["error"] = newJString("Not found")
+      except DuplicateUser:
+        resp["error"] = newJString("Account already exists")
+      except WrongPassword:
+        resp["error"] = newJString("Wrong password")
+      except:
+        resp["error"] = newJString("Unexpected error")
+      finally:
+        await ws.send($resp)
+  except WSClosedError:
+    discard
+  except WebSocketError as exc:
+    error "relay/server: WebSocketError: " & exc.msg
+    await req.sendError(Http400)
+  except Exception as exc:
+    error "relay/server: connection failed: " & exc.msg
+    await req.sendError(Http400)
+
 proc sendHTML*(req: HttpRequest, data: string) {.async.} =
   var headers = HttpTable.init()
   headers.add("Content-Type", "text/html")
@@ -488,7 +604,7 @@ proc sendHTML*(req: HttpRequest, data: string) {.async.} =
 
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
-  echo "Got request", $req.uri
+  echo "Got request: ", $req.uri
   when defined(testmode):
     allHttpRequests.add(req)
     defer:
@@ -496,6 +612,8 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   let path = req.uri.path
   if path == "/relay":
     await rs.handleRequestRelay(req)
+  elif path == "/auth":
+    await rs.handleRequestAuth(req)
   elif path == "/":
     let ctx = rs.mcontext()
     await req.sendHTML(render("{{>index}}", rs.mcontext()))

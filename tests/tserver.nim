@@ -18,7 +18,7 @@ test "add user":
     check rs.is_email_verified(uid) == false
     check rs.can_use_relay(uid) == false
     check rs.password_auth("foo", "password") == uid
-    expect ValueError:
+    expect WrongPassword:
       discard rs.password_auth("foo", "something else")
 
     let token = rs.generate_email_verification_token(uid)
@@ -26,6 +26,13 @@ test "add user":
     check rs.use_email_verification_token(uid, token) == true
     check rs.is_email_verified(uid) == true
     check rs.can_use_relay(uid) == true
+
+test "duplicate users not allowed":
+  withinTmpDir:
+    var rs = newRelayServer("test.db")
+    discard rs.register_user("foo", "password")
+    expect DuplicateUser:
+      discard rs.register_user("foo", "another")
 
 test "email verification only works once":
   withinTmpDir:
@@ -46,6 +53,26 @@ proc verified_user(rs: RelayServer, email: string, password = ""): int64 =
   result = rs.register_user(email, password)
   let token = rs.generate_email_verification_token(result)
   assert rs.use_email_verification_token(result, token) == true
+
+test "reset password":
+  withinTmpDir:
+    var rs = newRelayServer(":memory:")
+    let uid = rs.register_user("foo", "password")
+    let t1 = rs.generate_password_reset_token("foo")
+    check rs.user_for_password_reset_token(t1).get() == uid
+    rs.update_password_with_token(t1, "newpassword")
+    check rs.password_auth("foo", "newpassword") == uid
+
+test "reset password once only":
+  withinTmpDir:
+    var rs = newRelayServer(":memory:")
+    let uid = rs.register_user("foo", "password")
+    let t1 = rs.generate_password_reset_token("foo")
+    check rs.user_for_password_reset_token(t1).get() == uid
+    rs.update_password_with_token(t1, "newpassword")
+    expect NotFound:
+      rs.update_password_with_token(t1, "another password")
+    check rs.password_auth("foo", "newpassword") == uid
 
 test "block user":
   withinTmpDir:

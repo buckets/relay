@@ -10,6 +10,13 @@
       background-color: rgba(41, 156, 237, 1.0);
       background-color: rgba(52, 73, 94,1.0);
     }
+    hr {
+      border: 1px solid rgba(52, 73, 94,1.0);
+      border-width: 1px 0 0 0;
+      padding: 0;
+      height: 1px;
+      margin: 1rem auto .5rem;
+    }
     p {
       text-align: left;
     }
@@ -40,9 +47,20 @@
       padding: 1rem;
       border-radius: 4px;
       margin: 1rem auto;
+      text-align: left;
     }
     .box h2 {
       margin-top: 0;
+    }
+    .status {
+      padding: 1rem 0 0;
+      color: blue;
+    }
+    .status:empty {
+      padding: 0;
+    }
+    .error {
+      color: red;
     }
     </style>
   </head>
@@ -58,34 +76,269 @@
         Use of this server may be revoked at any time for any reason.
       </p>
 
-      <form method="post" action="/register" class="box">
+      <form id="register-form" class="box" onsubmit="register(); return false;">
         <h2>Register</h2>
         <div>
           <label>Email address</label>
-          <input type="email">
+          <input type="email" id="register-email">
         </div>
 
         <div>
           <label>Password</label>
-          <input type="password">
+          <input type="password" id="register-password">
         </div>
 
         <button>Register</button>
+        <div id="register-status" class="status"></div>
       </form>
 
-      <form method="post" action="/reset-password" class="box">
-        <h2>Forgot Password</h2>
+      <div class="box">
+        <h2>Verify email address</h2>
         <div>
           <label>Email address</label>
-          <input type="email" name="email">
+          <input type="email" id="verify-email">
         </div>
 
-        <button>Reset password</button>
+        <div>
+          <label>Verification code</label>
+          <input type="text" id="verify-token" size="8" style="font-family: monospace;">
+        </div>
+
+        <button type="submit" onclick="verifyEmail();">Verify</button>
+        <div id="verify-status" class="status"></div>
+        <hr/>
+        If you didn't receive a verification code, you can <button onclick="sendVerify();">email another code</button>
+        
+      </div>
+
+      <form id="reset-password-form" class="box" onsubmit="resetPassword(); return false;">
+        <h2>Forgot password?</h2>
+        <div>
+          <label>Email address</label>
+          <input type="email" id="reset-email">
+        </div>
+
+        <button>Email password reset token</button>
+        <div id="reset-status" class="status"></div>
       </form>
+
+      <div class="box">
+        <h2>Change password</h2>
+        <div>
+          <label>Password reset code</label>
+          <input type="text" id="password-token" size="32" style="font-family: monospace;">
+        </div>
+        <div>
+          <label>New password</label>
+          <input type="password" id="new-password">
+        </div>
+
+        <button onclick="updatePassword()">Update password</button>
+        <div id="password-status" class="status"></div>
+      </div>
 
       <p>
         This server is <a href="https://github.com/buckets/relay" target="_blank">Open Source</a> if you'd like to run your own instance.
       </p>
     </div>
+    <script>
+      class RPC {
+        constructor(url) {
+          this.id = 1;
+          this.queue = [];
+          this.pending = {};
+          this.open = false;
+          console.log("connecting to", url);
+          this.ws = new WebSocket(url);
+          this.ws.addEventListener('open', (event) => {
+            this.open = true;
+            this.pump();
+          });
+          this.ws.addEventListener('close', (event) => {
+            console.log("connection closed");
+            this.open = false;
+          });
+          this.ws.addEventListener('error', (event) => {
+            console.error("ws error", event);
+            this.open = false;
+          });
+          this.ws.addEventListener('message', (event) => {
+            this.gotMessage(event.data);
+          });
+        }
+        nextid() {
+          return this.id++;
+        }
+        async call(command, args) {
+          return new Promise((resolve, reject) => {
+            let msg = {
+              id: this.nextid(),
+              command: command,
+              args: args,
+            }
+            this.queue.push({resolve, reject, msg});
+            this.pump();
+          })
+        }
+        pump() {
+          while (this.open && this.queue.length > 0) {
+            let {resolve, reject, msg} = this.queue.shift();
+            this.pending[msg.id] = {resolve, reject};
+            this.ws.send(JSON.stringify(msg));
+          }
+        }
+        gotMessage(strdata) {
+          let data = JSON.parse(strdata);
+          if (data.id) {
+            // call response
+            let {resolve, reject} = this.pending[data.id];
+            delete this.pending[data.id];
+            if (data.error) {
+              reject(data.error);
+            } else {
+              resolve(data.response);
+            }
+          } else {
+            // notification
+          }
+        }
+      }
+      const wsurl = (
+        (window.location.protocol === "https" ? "wss" : "ws") +
+        "://" + window.location.host + "/auth"
+        );
+      let rpcinstance = null;
+      function getRPC() {
+        if (!rpcinstance) {
+          rpcinstance = new RPC(wsurl);
+        }
+        return rpcinstance;
+      }
+      let email_inputs = Array.from(document.querySelectorAll("input[type=email]"))
+      email_inputs.forEach(el => {
+        el.addEventListener('input', (ev) => {
+          email_inputs.forEach(other => {
+            if (el === other) {
+              return;
+            }
+            other.value = el.value;
+          })
+        })
+      })
+
+      function setStatus(thing, msg) {
+        let el = document.getElementById(thing + '-status');
+        el.classList.remove('error');
+        el.innerText = msg;
+      }
+      function setError(thing, msg) {
+        let el = document.getElementById(thing + '-status');
+        el.classList.add('error');
+        el.innerText = msg;
+      }
+      
+      async function register() {
+        let rpc = getRPC();
+        let email = document.getElementById('register-email');
+        let password = document.getElementById('register-password');
+        if (email.value && password.value) {
+          try {
+            let res = await rpc.call("register", {
+              email: email.value,
+              password: password.value,
+            });
+            password.value = '';
+            setStatus('register', 'Account registered! Check your email for a verification code.');
+          } catch(err) {
+            setError('register', err.toString());
+          }
+        } else {
+          setError('register', 'Email and password must not be blank');
+        }
+      }
+      
+      async function verifyEmail() {
+        let rpc = getRPC();
+        let email = document.getElementById('verify-email');
+        let code = document.getElementById('verify-token');
+        if (email.value && code.value) {
+          try {
+            let res = await rpc.call("verify", {
+              email: email.value,
+              code: code.value,
+            });
+            code.value = '';
+            if (res) {
+              setStatus('verify', 'Email address verified!');
+            } else {
+              setError("verify", 'Invalid verification code or email');
+            }
+          } catch(err) {
+            setError('verify', err.toString());
+          }
+        } else {
+          setError('verify', 'You must include both email and the verification code emailed to you.');
+        }
+      }
+
+      async function sendVerify() {
+        let rpc = getRPC();
+        let email = document.getElementById('verify-email');
+        if (email.value) {
+          try {
+            let res = await rpc.call("sendVerify", {
+              email: email.value,
+            });
+            if (res) {
+              setStatus('verify', 'Verification code sent! Check your email.');
+            } else {
+              setError("verify", 'Failed to send verification code.');
+            }
+          } catch(err) {
+            setError('verify', err.toString());
+          }
+        } else {
+          setError('verify', 'Enter your email address.');
+        }
+      }
+
+      async function resetPassword() {
+        let rpc = getRPC();
+        let email = document.getElementById('reset-email');
+        if (email.value) {
+          try {
+            let res = await rpc.call("resetPassword", {
+              email: email.value,
+            });
+            setStatus('reset', 'A password reset code has been emailed to you. Enter it below.');
+          } catch(err) {
+            setError('reset', err.toString());
+          }
+        } else {
+          setError('reset', 'Enter your email address.');
+        }
+      }
+      
+      async function updatePassword() {
+        let rpc = getRPC();
+        let token = document.getElementById('password-token');
+        let password = document.getElementById('new-password');
+        if (token.value && password.value) {
+          try {
+            let res = await rpc.call("updatePassword", {
+              token: token.value,
+              new_password: password.value,
+            });
+            setStatus('password', 'Password updated!');
+            token.value = '';
+            password.value = '';
+          } catch(err) {
+            setError('password', err.toString());
+          }
+        } else {
+          setError('password', 'You must include both the password reset code and a new password.');
+        }
+      }
+    </script>
   </body>
 </html>

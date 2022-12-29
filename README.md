@@ -19,3 +19,8 @@ TODO: include instructions for securing with TLS
 - This relay server can see all traffic, so clients should encrypt data intended for other clients.
 - Clients should also authenticate each other through the relay and not trust the authentication done by this server.
 
+## Development
+
+To run the server locally:
+
+  nimble run brelay server
