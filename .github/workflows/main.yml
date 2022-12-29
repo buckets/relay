@@ -21,8 +21,10 @@ jobs:
         version: ${{ matrix.version }}
     - name: Install
       run: nimble install -y
-    - name: Run tests
+    - name: Run tests in default config
       run: nimble test
+    - name: Run tests in production config
+      run: nimble test -d:usepostmark -d:openregistration -d:release
     - name: Command-line tests
       run: |
         tests/func1.sh

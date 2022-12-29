@@ -180,10 +180,12 @@ proc dbg*(ev: RelayEvent): string =
     result.add "Disconnected " & ev.dcon_pubkey.abbr
   of Data:
     result.add "Data " & ev.sender_pubkey.abbr & " data=" & $ev.data.len
+  of Entered:
+    result.add "Entered " & ev.entered_pubkey.abbr
+  of Exited:
+    result.add "Exited " & ev.exited_pubkey.abbr
   of ErrorEvent:
     result.add "Error " & ev.err_message
-  else:
-    discard
   result.add ")"
 
 proc dbg*(cmd: RelayCommand): string =

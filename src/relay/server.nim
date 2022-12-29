@@ -57,6 +57,7 @@ type
 const
   partialsDir = currentSourcePath.parentDir.parentDir / "partials"
   staticDir = currentSourcePath.parentDir.parentDir / "static"
+  OPEN_REGISTRATION = defined(openregistration)
 
 var mimedb = newMimetypes()
 
@@ -628,11 +629,12 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   let path = req.uri.path
   if path == "/relay":
     await rs.handleRequestRelay(req)
-  elif path == "/auth":
+  elif path == "/auth" and OPEN_REGISTRATION:
     await rs.handleRequestAuth(req)
   elif path == "/":
     let ctx = rs.mcontext()
-    await req.sendHTML(render("{{>index}}", rs.mcontext()))
+    ctx["openregistration"] = OPEN_REGISTRATION
+    await req.sendHTML(render("{{>index}}", ctx))
   elif path.startsWith("/static"):
     let subpath = path.substr("/static".len)
     try:

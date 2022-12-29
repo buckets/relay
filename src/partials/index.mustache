@@ -76,6 +76,7 @@
         Use of this server may be revoked at any time for any reason.
       </p>
 
+      {{#openregistration}}
       <form id="register-form" class="box" onsubmit="register(); return false;">
         <h2>Register</h2>
         <div>
@@ -136,11 +137,13 @@
         <button onclick="updatePassword()">Update password</button>
         <div id="password-status" class="status"></div>
       </div>
+      {{/openregistration}}
 
       <p>
         This server is <a href="https://github.com/buckets/relay" target="_blank">Open Source</a> if you'd like to run your own instance.
       </p>
     </div>
+    {{#openregistration}}
     <script>
       class RPC {
         constructor(url) {
@@ -340,5 +343,6 @@
         }
       }
     </script>
+    {{/openregistration}
   </body>
 </html>

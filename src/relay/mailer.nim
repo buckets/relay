@@ -11,7 +11,7 @@ const usepostmark = defined(usepostmark)
 const fromEmail {.strdefine.} = "relay@budgetwithbuckets.com"
 when usepostmark:
   const POSTMARK_API_KEY {.strdefine.} = "env:POSTMARK_API_KEY"
-
+  static: echo "POSTMARK_API_KEY: " & POSTMARK_API_KEY & "<--"
 proc valueRef(location: string): string =
   ## Get a value from the given location. `location` is a string
   ## prefixed with one of the following, which determines where

@@ -18,15 +18,6 @@ proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): R
   info &"Starting Buckets Relay on {taddress} ..."
   stderr.flushFile
   result.start(taddress)
-  # var httpserver = newAsyncHttpServer()
-  # proc cb(req: Request) {.async, gcsafe.} =
-  #   if req.url.path == "/":
-  #     await req.respond(Http200, "Buckets Relay\nVersion X")
-  #   elif req.url.path == "/relay":
-  #     await rs.handleRequest(req)
-  #   else:
-  #     await req.respond(Http404, "Not found")
-  # httpserver.serve(port, cb, address = address)
 
 proc addverifieduser*(dbfilename, username, password: string) =
   var rs = newRelayServer(dbfilename)
@@ -47,8 +38,6 @@ proc stats(dbfilename: string, days = 30): JsonNode =
       "recv": row.data.recv,
       "user": row.user,
     })
-  #   result.add &"| {row.data.sent} | {row.data.recv} | {row.user} |\n"
-  # result.add "\nTop IPs:\n"
   for row in rs.top_data_ips(20, days = days):
     result["ips"].add(%* {
       "sent": row.data.sent,
