@@ -31,7 +31,7 @@ proc stats(dbfilename: string, days = 30): JsonNode =
     "users": [],
     "ips": [],
   }
-  var rs = newRelayServer(dbfilename)
+  var rs = newRelayServer(dbfilename, updateSchema = false)
   for row in rs.top_data_users(20, days = days):
     result["users"].add(%* {
       "sent": row.data.sent,

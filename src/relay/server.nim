@@ -46,6 +46,7 @@ type
   RelayServer* = ref object
     relay: Relay[WSClient]
     dbfilename: string
+    updateSchema: bool
     userdb: Option[DbConn]
     http: RelayHttpServer
     mcontext*: proc(): mustache.Context
@@ -136,10 +137,11 @@ proc `handler=`*(rhs: RelayHttpServer, handler: HttpAsyncCallback) =
   of false:
     rhs.httpServer.handler = handler
 
-proc newRelayServer*(dbfilename: string): RelayServer =
+proc newRelayServer*(dbfilename: string, updateSchema = true): RelayServer =
   new(result)
   result.relay = newRelay[WSClient]()
   result.dbfilename = dbfilename
+  result.updateSchema = updateSchema
   result.mcontext = proc(): Context =
     result = newContext()
     result.addDefaultContext()
@@ -215,7 +217,8 @@ proc db*(rs: RelayServer): DbConn =
   if not rs.userdb.isSome:
     var db = open(rs.dbfilename, "", "", "")
     db.exec(sql"PRAGMA foreign_keys = ON")
-    db.upgradeSchema(userdbSchema)
+    if rs.updateSchema:
+      db.upgradeSchema(userdbSchema)
     rs.userdb = some(db)
   rs.userdb.get()
 
@@ -629,8 +632,11 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   let path = req.uri.path
   if path == "/relay":
     await rs.handleRequestRelay(req)
-  elif path == "/auth" and OPEN_REGISTRATION:
-    await rs.handleRequestAuth(req)
+  elif path == "/auth":
+    when OPEN_REGISTRATION:
+      await rs.handleRequestAuth(req)
+    else:
+      await req.sendError(Http404)
   elif path == "/":
     let ctx = rs.mcontext()
     ctx["openregistration"] = OPEN_REGISTRATION
