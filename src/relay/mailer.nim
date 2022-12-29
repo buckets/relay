@@ -3,6 +3,8 @@ import std/os
 import std/strformat
 import std/strutils
 
+import chronos
+
 const usepostmark = defined(usepostmark)
 const fromEmail {.strdefine.} = "relay@budgetwithbuckets.com"
 when usepostmark:
@@ -10,7 +12,7 @@ when usepostmark:
 
   import std/json
   import ./httpreq
-  import chronos
+  
 
 proc valueRef(location: string): string =
   ## Get a value from the given location. `location` is a string
