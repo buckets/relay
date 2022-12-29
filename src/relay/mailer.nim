@@ -1,17 +1,17 @@
-import std/json
 import std/logging
 import std/os
 import std/strformat
 import std/strutils
 
-import ./httpreq
-import chronos
-
 const usepostmark = defined(usepostmark)
 const fromEmail {.strdefine.} = "relay@budgetwithbuckets.com"
 when usepostmark:
   const POSTMARK_API_KEY {.strdefine.} = "env:POSTMARK_API_KEY"
-  static: echo "POSTMARK_API_KEY: " & POSTMARK_API_KEY & "<--"
+
+  import std/json
+  import ./httpreq
+  import chronos
+
 proc valueRef(location: string): string =
   ## Get a value from the given location. `location` is a string
   ## prefixed with one of the following, which determines where
@@ -37,9 +37,9 @@ proc sendEmail*(toEmail, subject, text: string) {.async.} =
     })
     var headers = HttpTable.init()
     headers.add("Accept", "application/json")
-    headers.add("Content-Type": "application/json")
+    headers.add("Content-Type", "application/json")
     headers.add("X-Postmark-Server-Token", POSTMARK_API_KEY.valueRef)
-    let (code, res) = request("https://api.postmarkapp.com/email", MethodPost, data, headers = headers)
+    let (code, res) = await request("https://api.postmarkapp.com/email", MethodPost, data, headers = headers)
     if code != 200:
       error "Error sending email: " & $res
   else:

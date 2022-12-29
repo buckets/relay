@@ -6,7 +6,8 @@ import std/uri
 
 import chronos
 import chronos/apps/http/httpclient
-import chronos/apps/http/httpcommon; export HttpMethod
+import chronos/apps/http/httpcommon; export httpcommon
+import chronos/apps/http/httptable; export httptable
 
 export waitFor
 
