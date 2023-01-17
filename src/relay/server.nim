@@ -442,36 +442,8 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
     result.add((row[0].s, (row[1].i.int, row[2].i.int)))
 
 #-------------------------------------------------------------
-# Websockets/network stuff
+# Common HTTP helpers
 #-------------------------------------------------------------
-
-proc sendEvent*(c: WSClient, ev: RelayEvent) =
-  if not c.ws.isNil:
-    let msg = nsencode(dumps(ev))
-    c.relayserver.log_user_data_recv(c.user_id, msg.len)
-    c.relayserver.log_ip_data_recv(c.ip, msg.len)
-    asyncCheck c.ws.send(msg.toBytes, Opcode.Binary)
-
-proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WSClient =
-  new(result)
-  result.ws = ws
-  result.relayserver = rs
-  result.user_id = user_id
-  result.ip = ip
-
-proc authenticate*(rs: RelayServer, req: HttpRequest): int64 =
-  ## Perform HTTP basic authentication and return the
-  ## user id if correct.
-  let authorization = req.headers.getString("authorization")
-  let parts = authorization.strip().split(" ")
-  doAssert parts.len == 2, "Authorization header should have 2 items"
-  doAssert parts[0] == "Basic", "Only basic HTTP auth is supported"
-  let credentials = base64.decode(parts[1]).split(":", maxsplit = 1)
-  doAssert credentials.len == 2, "Must supply username and password"
-  let
-    username = credentials[0]
-    password = credentials[1]
-  return rs.password_auth(username, password)
 
 proc ipAddress(request: HttpRequest): string =
   ## Return the IP Address associated with this request
@@ -489,10 +461,48 @@ proc ipAddress(request: HttpRequest): string =
     return result
   result = request.stream.writer.tsource.remoteAddress().host()
 
+proc sendHTML(req: HttpRequest, data: string) {.async.} =
+  var headers = HttpTable.init()
+  headers.add("Content-Type", "text/html")
+  await req.sendResponse(Http200, headers, data = data)
+
+#-------------------------------------------------------------
+# Version 1
+#-------------------------------------------------------------
+
+proc sendEvent*(c: WSClient, ev: RelayEvent) =
+  ## Send an event to a single ws client
+  if not c.ws.isNil:
+    let msg = nsencode(dumps(ev))
+    c.relayserver.log_user_data_recv(c.user_id, msg.len)
+    c.relayserver.log_ip_data_recv(c.ip, msg.len)
+    asyncCheck c.ws.send(msg.toBytes, Opcode.Binary)
+
+proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WSClient =
+  new(result)
+  result.ws = ws
+  result.relayserver = rs
+  result.user_id = user_id
+  result.ip = ip
+
+proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
+  ## Perform HTTP basic authentication and return the
+  ## user id if correct.
+  let authorization = req.headers.getString("authorization")
+  let parts = authorization.strip().split(" ")
+  doAssert parts.len == 2, "Authorization header should have 2 items"
+  doAssert parts[0] == "Basic", "Only basic HTTP auth is supported"
+  let credentials = base64.decode(parts[1]).split(":", maxsplit = 1)
+  doAssert credentials.len == 2, "Must supply username and password"
+  let
+    username = credentials[0]
+    password = credentials[1]
+  return rs.password_auth(username, password)
+
 when defined(testmode):
   var allHttpRequests*: seq[HttpRequest]
 
-proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   # Perform HTTP basic authenciation
   let user_id = block:
     try:
@@ -544,7 +554,7 @@ proc handleRequestRelay*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     if not relayconn.isNil:
       rs.relay.removeConnection(relayconn)
 
-proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async.} =
+proc handleRequestAuthV1(rs: RelayServer, req: HttpRequest) {.async.} =
   ## Handle user registration activities
   # Upgrade protocol to websockets
   try:
@@ -618,10 +628,36 @@ proc handleRequestAuth*(rs: RelayServer, req: HttpRequest) {.async.} =
     error "relay/server: connection failed: " & exc.msg
     await req.sendError(Http400)
 
-proc sendHTML*(req: HttpRequest, data: string) {.async.} =
-  var headers = HttpTable.init()
-  headers.add("Content-Type", "text/html")
-  await req.sendResponse(Http200, headers, data = data)
+proc handleRequestV1(rs: RelayServer, req: HttpRequest, subpath: string) {.async, gcsafe.} =
+  ## Version 1 request handling
+  var path = req.uri.path.substr(subpath.len)
+  if path == "": path = "/"
+
+  if path == "/relay":
+    await rs.handleRequestRelayV1(req)
+  elif path == "/auth":
+    when OPEN_REGISTRATION:
+      await rs.handleRequestAuthV1(req)
+    else:
+      await req.sendError(Http404)
+  elif path == "/":
+    let ctx = rs.mcontext()
+    ctx["openregistration"] = OPEN_REGISTRATION
+    await req.sendHTML(render("{{>index}}", ctx))
+  elif path.startsWith("/static"):
+    let subpath = path.substr("/static".len)
+    try:
+      var headers = HttpTable.init()
+      headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
+      await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
+    except:
+      await req.sendError(Http404)
+  else:
+    await req.sendError(Http404)
+
+#-------------------------------------------------------------
+# HTTP routing common to all versions
+#-------------------------------------------------------------
 
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
@@ -630,17 +666,23 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     defer:
       allHttpRequests.delete(allHttpRequests.find(req))
   let path = req.uri.path
-  if path == "/relay":
-    await rs.handleRequestRelay(req)
-  elif path == "/auth":
-    when OPEN_REGISTRATION:
-      await rs.handleRequestAuth(req)
-    else:
-      await req.sendError(Http404)
+  if path.startsWith("/v1"):
+    await rs.handleRequestV1(req, "/v1")
+  elif path == "/versions":
+    await req.sendResponse(Http200, data = $(%* {
+      "versions": [
+        {
+          "version": "1",
+          "authMethods": [
+            "usernamePassword",
+          ],
+        },
+      ]
+    }))
   elif path == "/":
-    let ctx = rs.mcontext()
-    ctx["openregistration"] = OPEN_REGISTRATION
-    await req.sendHTML(render("{{>index}}", ctx))
+    var headers = HttpTable.init()
+    headers.add("Location", "/v1")
+    await req.sendResponse(Http307, headers, "")
   elif path.startsWith("/static"):
     let subpath = path.substr("/static".len)
     try:

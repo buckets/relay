@@ -81,13 +81,13 @@ test "basic":
     var c1h = newClientHandler()
     var keys1 = genkeys()
     var client1 = newRelayClient(keys1, c1h, "alice", "password")
-    waitFor client1.connect("ws://127.0.0.1:9001/relay")
+    waitFor client1.connect("ws://127.0.0.1:9001/v1/relay")
     discard waitFor c1h.popEvent(ConnectedToServer)
 
     var c2h = newClientHandler()
     var keys2 = genkeys()
     var client2 = newRelayClient(keys2, c2h, "bob", "password")
-    waitFor client2.connect("ws://127.0.0.1:9001/relay")
+    waitFor client2.connect("ws://127.0.0.1:9001/v1/relay")
     discard waitFor c2h.popEvent(ConnectedToServer)
 
     waitFor client1.connect(keys2.pk)
@@ -118,7 +118,7 @@ test "NotConnected":
     var ch = newClientHandler()
     var keys1 = genkeys()
     var client1 = newRelayClient(keys1, ch, "alice", "password")
-    waitFor client1.connect("ws://127.0.0.1:9002/relay")
+    waitFor client1.connect("ws://127.0.0.1:9002/v1/relay")
     echo "Stopping relay server ..."
     waitFor server.finish()
     echo "Relay server stopped"
@@ -143,4 +143,4 @@ test "wrong credentials":
   var keys1 = genkeys()
   var client1 = newRelayClient(keys1, ch, "alice", "wrongpassword")
   expect RelayErrLoginFailed:
-    waitFor client1.connect("ws://127.0.0.1:9003/relay")
+    waitFor client1.connect("ws://127.0.0.1:9003/v1/relay")

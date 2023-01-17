@@ -17,7 +17,7 @@ test "copy":
     tlog "Adding users ..."
     addverifieduser("data.sqlite", "alice", "alice")
     addverifieduser("data.sqlite", "bob", "bob")
-    let relayurl = "http://127.0.0.1:9001/relay"
+    let relayurl = "http://127.0.0.1:9001/v1/relay"
     tlog "Starting relay ..."
     let server = startRelay("data.sqlite", 9001.Port, "127.0.0.1")
     tlog "Generating keys ..."

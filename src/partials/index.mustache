@@ -208,7 +208,7 @@
       }
       const wsurl = (
         (window.location.protocol === "https" ? "wss" : "ws") +
-        "://" + window.location.host + "/auth"
+        "://" + window.location.host + "/v1/auth"
         );
       let rpcinstance = null;
       function getRPC() {
