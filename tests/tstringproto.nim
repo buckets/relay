@@ -40,6 +40,10 @@ suite "RelayEvent":
     cev RelayEvent(kind: Data, sender_pubkey: "hey".PublicKey, data: "bob")
   test "ErrorEvent":
     cev RelayEvent(kind: ErrorEvent, err_message: "foo")
+  test "Entered":
+    cev RelayEvent(kind: Entered, entered_pubkey: "alice".PublicKey)
+  test "Exited":
+    cev RelayEvent(kind: Exited, exited_pubkey: "bob".PublicKey)
 
 suite "RelayCommand":
 
