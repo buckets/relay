@@ -566,156 +566,159 @@ when defined(testmode):
 
 proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   # Perform HTTP basic authenciation
-  let user_id = block:
-    try:
-      rs.authenticate(req)
-    except:
+  {.gcsafe.}:
+    let user_id = block:
+      try:
+        rs.authenticate(req)
+      except:
+        await req.sendError(Http403)
+        return
+    if not rs.can_use_relay(user_id):
+      info &"User {user_id} blocked from using relay"
       await req.sendError(Http403)
       return
-  if not rs.can_use_relay(user_id):
-    info &"User {user_id} blocked from using relay"
-    await req.sendError(Http403)
-    return
-  let ip = req.ipAddress()
+    let ip = req.ipAddress()
 
-  # Upgrade protocol to websockets
-  var relayconn: RelayConnection[WSClient]
-  try:
-    let deflateFactory = deflateFactory()
-    let server = WSServer.new(factories = [deflateFactory])
-    var ws = await server.handleRequest(req)
-    if ws.readyState != Open:
-      raise ValueError.newException("Failed to open websocket connection")
-
-    var wsclient = newWSClient(rs, ws, user_id, ip)
+    # Upgrade protocol to websockets
+    var relayconn: RelayConnection[WSClient]
     try:
-      relayconn = rs.relay.initAuth(wsclient, channel = $user_id)
-      var decoder = newNetstringDecoder()
+      let deflateFactory = deflateFactory()
+      let server = WSServer.new(factories = [deflateFactory])
+      var ws = await server.handleRequest(req)
+      if ws.readyState != Open:
+        raise ValueError.newException("Failed to open websocket connection")
+
+      var wsclient = newWSClient(rs, ws, user_id, ip)
+      try:
+        relayconn = rs.relay.initAuth(wsclient, channel = $user_id)
+        var decoder = newNetstringDecoder()
+        while ws.readyState != ReadyState.Closed:
+          let buff = try:
+              await ws.recvMsg()
+            except:
+              break
+          rs.log_user_data_sent(user_id, buff.len)
+          rs.log_ip_data_sent(ip, buff.len)
+          decoder.consume(string.fromBytes(buff))
+          while decoder.hasMessage():
+            let cmd = loadsRelayCommand(decoder.nextMessage())
+            rs.relay.handleCommand(relayconn, cmd)
+      finally:
+        wsclient.ws = nil
+    except WSClosedError:
+      debug "relay/server: ws closed"
+    except WebSocketError as exc:
+      error "relay/server: WebSocketError: " & exc.msg
+      await req.sendError(Http400)
+    except Exception as exc:
+      error "relay/server: connection failed: " & exc.msg
+      await req.sendError(Http400)
+    finally:
+      if not relayconn.isNil:
+        rs.relay.removeConnection(relayconn)
+
+proc handleRequestAuthV1(rs: RelayServer, req: HttpRequest) {.async.} =
+  ## Handle user registration activities
+  # Upgrade protocol to websockets
+  {.gcsafe.}:
+    try:
+      let deflateFactory = deflateFactory()
+      let server = WSServer.new(factories = [deflateFactory])
+      var ws = await server.handleRequest(req)
+      if ws.readyState != Open:
+        raise ValueError.newException("Failed to open websocket connection")
+
       while ws.readyState != ReadyState.Closed:
         let buff = try:
             await ws.recvMsg()
           except:
             break
-        rs.log_user_data_sent(user_id, buff.len)
-        rs.log_ip_data_sent(ip, buff.len)
-        decoder.consume(string.fromBytes(buff))
-        while decoder.hasMessage():
-          let cmd = loadsRelayCommand(decoder.nextMessage())
-          rs.relay.handleCommand(relayconn, cmd)
-    finally:
-      wsclient.ws = nil
-  except WSClosedError:
-    debug "relay/server: ws closed"
-  except WebSocketError as exc:
-    error "relay/server: WebSocketError: " & exc.msg
-    await req.sendError(Http400)
-  except Exception as exc:
-    error "relay/server: connection failed: " & exc.msg
-    await req.sendError(Http400)
-  finally:
-    if not relayconn.isNil:
-      rs.relay.removeConnection(relayconn)
-
-proc handleRequestAuthV1(rs: RelayServer, req: HttpRequest) {.async.} =
-  ## Handle user registration activities
-  # Upgrade protocol to websockets
-  try:
-    let deflateFactory = deflateFactory()
-    let server = WSServer.new(factories = [deflateFactory])
-    var ws = await server.handleRequest(req)
-    if ws.readyState != Open:
-      raise ValueError.newException("Failed to open websocket connection")
-
-    while ws.readyState != ReadyState.Closed:
-      let buff = try:
-          await ws.recvMsg()
-        except:
-          break
-      let msg = string.fromBytes(buff)
-      let data = parseJson(msg)
-      var resp = newJObject()
-      resp["id"] = data["id"]
-      try:
-        let command = data["command"].getStr()
-        let args = data["args"]
-        case command
-        of "register":
-          let email = args["email"].getStr()
-          let password = args["password"].getStr()
-          let user_id = rs.register_user(email, password)
-          let email_token = rs.generate_email_verification_token(user_id)
-          await sendEmail(email, "Buckets Relay - Email Verification",
-            &"Use this code to verify your email address:\n\n{email_token}")
-          resp["response"] = newJBool(true)
-        of "sendVerify":
-          let email = args["email"].getStr()
-          let user_id = rs.get_user_id(email)
-          let email_token = rs.generate_email_verification_token(user_id)
-          await sendEmail(email, "Buckets Relay - Email Verification",
-            &"Use this code to verify your email address:\n\n{email_token}")
-          resp["response"] = newJBool(true)
-        of "verify":
-          let email = args["email"].getStr()
-          let code = args["code"].getStr()
-          let user_id = rs.get_user_id(email)
-          resp["response"] = newJBool(rs.use_email_verification_token(user_id, code))
-        of "resetPassword":
-          let email = args["email"].getStr()
-          let pw_token = rs.generate_password_reset_token(email)
-          await sendEmail(email, "Buckets Relay - Password Reset",
-            &"Use this code to change your password:\n\n{pw_token}")
-        of "updatePassword":
-          let pw_token = args["token"].getStr()
-          let new_password = args["new_password"].getStr()
-          rs.update_password_with_token(pw_token, new_password)
-        else:
-          resp["error"] = newJString("Unknown command");
-      except NotFound:
-        resp["error"] = newJString("Not found")
-      except DuplicateUser:
-        resp["error"] = newJString("Account already exists")
-      except WrongPassword:
-        resp["error"] = newJString("Wrong password")
-      except Exception as exc:
-        resp["error"] = newJString("Unexpected error")
-        error exc.msg
-      finally:
-        await ws.send($resp)
-  except WSClosedError:
-    discard
-  except WebSocketError as exc:
-    error "relay/server: WebSocketError: " & exc.msg
-    await req.sendError(Http400)
-  except Exception as exc:
-    error "relay/server: connection failed: " & exc.msg
-    await req.sendError(Http400)
+        let msg = string.fromBytes(buff)
+        let data = parseJson(msg)
+        var resp = newJObject()
+        resp["id"] = data["id"]
+        try:
+          let command = data["command"].getStr()
+          let args = data["args"]
+          case command
+          of "register":
+            let email = args["email"].getStr()
+            let password = args["password"].getStr()
+            let user_id = rs.register_user(email, password)
+            let email_token = rs.generate_email_verification_token(user_id)
+            await sendEmail(email, "Buckets Relay - Email Verification",
+              &"Use this code to verify your email address:\n\n{email_token}")
+            resp["response"] = newJBool(true)
+          of "sendVerify":
+            let email = args["email"].getStr()
+            let user_id = rs.get_user_id(email)
+            let email_token = rs.generate_email_verification_token(user_id)
+            await sendEmail(email, "Buckets Relay - Email Verification",
+              &"Use this code to verify your email address:\n\n{email_token}")
+            resp["response"] = newJBool(true)
+          of "verify":
+            let email = args["email"].getStr()
+            let code = args["code"].getStr()
+            let user_id = rs.get_user_id(email)
+            resp["response"] = newJBool(rs.use_email_verification_token(user_id, code))
+          of "resetPassword":
+            let email = args["email"].getStr()
+            let pw_token = rs.generate_password_reset_token(email)
+            await sendEmail(email, "Buckets Relay - Password Reset",
+              &"Use this code to change your password:\n\n{pw_token}")
+          of "updatePassword":
+            let pw_token = args["token"].getStr()
+            let new_password = args["new_password"].getStr()
+            rs.update_password_with_token(pw_token, new_password)
+          else:
+            resp["error"] = newJString("Unknown command");
+        except NotFound:
+          resp["error"] = newJString("Not found")
+        except DuplicateUser:
+          resp["error"] = newJString("Account already exists")
+        except WrongPassword:
+          resp["error"] = newJString("Wrong password")
+        except Exception as exc:
+          resp["error"] = newJString("Unexpected error")
+          error exc.msg
+        finally:
+          await ws.send($resp)
+    except WSClosedError:
+      discard
+    except WebSocketError as exc:
+      error "relay/server: WebSocketError: " & exc.msg
+      await req.sendError(Http400)
+    except Exception as exc:
+      error "relay/server: connection failed: " & exc.msg
+      await req.sendError(Http400)
 
 proc handleRequestV1(rs: RelayServer, req: HttpRequest, subpath: string) {.async, gcsafe.} =
   ## Version 1 request handling
-  var path = req.uri.path.substr(subpath.len)
-  if path == "": path = "/"
+  {.gcsafe.}:
+    var path = req.uri.path.substr(subpath.len)
+    if path == "": path = "/"
 
-  if path == "/relay":
-    await rs.handleRequestRelayV1(req)
-  elif path == "/auth":
-    when OPEN_REGISTRATION:
-      await rs.handleRequestAuthV1(req)
+    if path == "/relay":
+      await rs.handleRequestRelayV1(req)
+    elif path == "/auth":
+      when OPEN_REGISTRATION:
+        await rs.handleRequestAuthV1(req)
+      else:
+        await req.sendError(Http404)
+    elif path == "/":
+      let ctx = rs.mcontext()
+      ctx["openregistration"] = OPEN_REGISTRATION
+      await req.sendHTML(render("{{>index}}", ctx))
+    elif path.startsWith("/static"):
+      let subpath = path.substr("/static".len)
+      try:
+        var headers = HttpTable.init()
+        headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
+        await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
+      except:
+        await req.sendError(Http404)
     else:
       await req.sendError(Http404)
-  elif path == "/":
-    let ctx = rs.mcontext()
-    ctx["openregistration"] = OPEN_REGISTRATION
-    await req.sendHTML(render("{{>index}}", ctx))
-  elif path.startsWith("/static"):
-    let subpath = path.substr("/static".len)
-    try:
-      var headers = HttpTable.init()
-      headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
-      await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
-    except:
-      await req.sendError(Http404)
-  else:
-    await req.sendError(Http404)
 
 #-------------------------------------------------------------
 # HTTP routing common to all versions
@@ -723,29 +726,30 @@ proc handleRequestV1(rs: RelayServer, req: HttpRequest, subpath: string) {.async
 
 proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   ## Handle a relay server websocket request.
-  when defined(testmode):
-    allHttpRequests.add(req)
-    defer:
-      allHttpRequests.delete(allHttpRequests.find(req))
-  let path = req.uri.path
-  if path.startsWith("/v1"):
-    await rs.handleRequestV1(req, "/v1")
-  elif path == "/versions":
-    await req.sendResponse(Http200, data = versionSupport)
-  elif path == "/":
-    var headers = HttpTable.init()
-    headers.add("Location", "/v1")
-    await req.sendResponse(Http307, headers, "")
-  elif path.startsWith("/static"):
-    let subpath = path.substr("/static".len)
-    try:
+  {.gcsafe.}:
+    when defined(testmode):
+      allHttpRequests.add(req)
+      defer:
+        allHttpRequests.delete(allHttpRequests.find(req))
+    let path = req.uri.path
+    if path.startsWith("/v1"):
+      await rs.handleRequestV1(req, "/v1")
+    elif path == "/versions":
+      await req.sendResponse(Http200, data = versionSupport)
+    elif path == "/":
       var headers = HttpTable.init()
-      headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
-      await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
-    except:
+      headers.add("Location", "/v1")
+      await req.sendResponse(Http307, headers, "")
+    elif path.startsWith("/static"):
+      let subpath = path.substr("/static".len)
+      try:
+        var headers = HttpTable.init()
+        headers.add("Content-Type", mimedb.getMimetype(path.splitFile.ext))
+        await req.sendResponse(Http200, headers, data = readStaticFile(subpath))
+      except:
+        await req.sendError(Http404)
+    else:
       await req.sendError(Http404)
-  else:
-    await req.sendError(Http404)
 
 proc start*(rs: RelayServer, address: TransportAddress) =
   ## Start the relay server at the given address.
