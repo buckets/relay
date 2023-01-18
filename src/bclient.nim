@@ -13,6 +13,7 @@ import chronos
 
 import relay/client
 import relay/proto
+import relay/asyncstdin
 
 type
   SendHandler = ref object
@@ -78,10 +79,46 @@ proc relayReceive*(frompubkey: PublicKey, relayurl: string, mykeys: KeyPair, use
   await client.disconnect()
   await client.done
 
+type
+  ChatHandler = ref object
+    done: Future[void]
+
+proc handleEvent(handler: ChatHandler, ev: RelayEvent, remote: RelayClient) {.async.} =
+  case ev.kind
+  of Data:
+    stdout.write(ev.data)
+    stdout.flushFile()
+  of Disconnected:
+    handler.done.complete()
+  else:
+    discard
+
+proc handleLifeEvent(handler: ChatHandler, ev: ClientLifeEvent, remote: RelayClient) {.async.} =
+  discard
+
+proc chat(ch: ChatHandler, remote: RelayClient, remotePubkey: PublicKey) {.async.} =
+  let reader = asyncStdinReader()
+  while true:
+    let inp = reader.read(1)
+    await ch.done or inp
+    if ch.done.completed:
+      await inp.cancelAndWait()
+      break
+    else:
+      let data = inp.read()
+      await remote.sendData(remotePubkey, data)
+
+proc relayChat*(otherpubkey: PublicKey, relayurl: string, mykeys: KeyPair, username: string, password: string): Future[string] {.async.} =
+  debug &"Attempting to chat with {otherpubkey} via {relayurl} ..."
+  var ch = ChatHandler()
+  ch.done = newFuture[void]()
+  var client = newRelayClient(mykeys, ch, username, password)
+  await client.connect(relayurl)
+  await client.connect(otherpubkey)
+  await ch.chat(client, otherpubkey)
   
 when isMainModule:
   import argparse
-  newConsoleLogger(lvlAll, useStderr = true).addHandler()
   var p = newParser:
     command("genkeys"):
       help("Generate a keypair")
@@ -101,9 +138,10 @@ when isMainModule:
       option("-p", "--password", help="Relay password", env = "RELAY_PASSWORD")
       option("--local-secret", help="Path to local secret key", default=some("relay.key.secret"))
       option("--local-public", help="Path to local public key", default=some("relay.key.public"))
-      arg("url", help="Relay URL to connect to")
+      arg("url", help="Relay URL to connect to. Should end in /v1")
       arg("public_key", help="Public key of remote client to connect to")
       run:
+        newConsoleLogger(lvlAll, useStderr = true).addHandler()
         let keys = (
           readFile(opts.local_public).decode().PublicKey,
           readFile(opts.local_secret).decode().SecretKey,
@@ -117,7 +155,23 @@ when isMainModule:
       option("-p", "--password", help="Relay password", env = "RELAY_PASSWORD")
       option("--local-secret", help="Path to local secret key", default=some("relay.key.secret"))
       option("--local-public", help="Path to local public key", default=some("relay.key.public"))
-      arg("url", help="Relay URL to connect to")
+      arg("url", help="Relay URL to connect to. Should end in /v1")
+      arg("public_key", help="Public key of remote client to connect to")
+      run:
+        newConsoleLogger(lvlAll, useStderr = true).addHandler()
+        let keys = (
+          readFile(opts.local_public).decode().PublicKey,
+          readFile(opts.local_secret).decode().SecretKey,
+        )
+        let pubkey = opts.public_key.decode().PublicKey
+        echo waitFor relayReceive(pubkey, relayurl = opts.url, mykeys = keys, username = opts.username, password = opts.password)
+    command("chat"):
+      help("Open a symmetric chat stream with another client")
+      option("-u", "--username", help="Relay username", env = "RELAY_USERNAME")
+      option("-p", "--password", help="Relay password", env = "RELAY_PASSWORD")
+      option("--local-secret", help="Path to local secret key", default=some("relay.key.secret"))
+      option("--local-public", help="Path to local public key", default=some("relay.key.public"))
+      arg("url", help="Relay URL to connect to. Should end in /v1")
       arg("public_key", help="Public key of remote client to connect to")
       run:
         let keys = (
@@ -125,7 +179,7 @@ when isMainModule:
           readFile(opts.local_secret).decode().SecretKey,
         )
         let pubkey = opts.public_key.decode().PublicKey
-        echo waitFor relayReceive(pubkey, relayurl = opts.url, mykeys = keys, username = opts.username, password = opts.password)
+        echo waitFor relayChat(pubkey, relayurl = opts.url, mykeys = keys, username = opts.username, password = opts.password)
   try:
     p.run()
   except UsageError:

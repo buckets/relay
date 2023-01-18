@@ -43,7 +43,7 @@ proc popEvent(client: ClientHandler, k: EventKind): Future[RelayEvent] {.async, 
     else:
       if delay > 1000:
         echo "Waiting for event: " & $k
-      await sleepAsync(delay)
+      await sleepAsync(delay.milliseconds)
       delay += 100
 
 proc popEvent(client: ClientHandler, k: ClientLifeEventKind): Future[ClientLifeEvent] {.async.} =
@@ -61,7 +61,7 @@ proc popEvent(client: ClientHandler, k: ClientLifeEventKind): Future[ClientLifeE
     else:
       if delay > 1000:
         echo "Waiting for event: " & $k
-      await sleepAsync(delay)
+      await sleepAsync(delay.milliseconds)
       delay += 100
 
 proc verified_user(rs: RelayServer, email: string, password = ""): int64 =

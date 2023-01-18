@@ -10,6 +10,7 @@ import ./util
 import chronos
 
 import relay/server
+import relay/licenses
 
 test "add user":
   withinTmpDir:
@@ -109,3 +110,59 @@ test "log user data":
       ("10.0.0.4", (0, 20)),
       ("10.0.0.5", (10, 0)),
     ]
+
+const SAMPLE_PRIVATE_KEY = """
+-----BEGIN RSA PRIVATE KEY-----
+MIICWwIBAAKBgH29pIKU/P8ELlA4ofzSiq4InGzd45hxqE/vfqqUOP70Sa5R5s6W
+ntYVz6x5Btp8uc2vwWcDg4gFDkyBJ9xShROaCrtvncRIbJ5m3uka46yAObWYkKxP
++e3AMud/8tu5DvnJRiPq9Nu0wbdWXePriajk/Nc4CQAl8tB1Ka1QWLhhAgMBAAEC
+gYBLP5aX3vmY07OzpnCqkIUVqWmTbSarMDl9vOGcy59gVGlTvQfXUiQ0ElF58eO8
+FTBMe4XOVDf+yqfH+PMV0vx348rxXG1z2SBAB9tDk4G54bldeoEOtU3kcZCQhstr
+A7i4bjFwEK73URRMFaa8/NFGAC9KQ+eD1o/kptB8GPFWEQJBAOuyvEl1mFZtCXHB
+THLL92isP/o/q6+dLpI6WlmakFawV1Aof5QPrGeYf50R+c9XebkAxKRtSfzMeQ5u
+wLUuPMsCQQCIkkpzrsMtvEPV8iuIphJHcQ7T4DP+Z0iRwN+AjWN9FL6tlTuuIdYW
+EsGX6SBeKLbgpsIPsXz+ipsISTnhO8YDAkAuOJrb/QemyzMy76lCSeV2zXCubpYI
+llZvrqnRMJJlracxvP9n1bsFhc5gywmmM41XTmNBq3z66k5DGk0IOs0JAkBcZsYy
+0NpDdm5bMZdcxCf36DmFBtuG0/CYlOtjOcZHWaLNJPwVC9WiZ5xOILACpP9erdT8
+8zRDsBnGmGytxFhrAkEAlrmBpqG8yQyLnyls/R6CPbewf4iqy9utub2ZeiqjYMO4
+aXJie+gnu0Oc8WMQF4BFshD6Lr76QgwUcvjIraNJZw==
+-----END RSA PRIVATE KEY-----
+""".strip()
+
+const SAMPLE_PUBLIC_KEY = """
+-----BEGIN PUBLIC KEY-----
+MIGeMA0GCSqGSIb3DQEBAQUAA4GMADCBiAKBgH29pIKU/P8ELlA4ofzSiq4InGzd
+45hxqE/vfqqUOP70Sa5R5s6WntYVz6x5Btp8uc2vwWcDg4gFDkyBJ9xShROaCrtv
+ncRIbJ5m3uka46yAObWYkKxP+e3AMud/8tu5DvnJRiPq9Nu0wbdWXePriajk/Nc4
+CQAl8tB1Ka1QWLhhAgMBAAE=
+-----END PUBLIC KEY-----
+""".strip()
+
+test "authenticate with Buckets license":
+  withinTmpDir:
+    var rs = newRelayServer("test.db", pubkey = SAMPLE_PUBLIC_KEY)
+    let license = createV1License(SAMPLE_PRIVATE_KEY, "jim@jim.com")
+    let uid = rs.license_auth($license)
+    let uid2 = rs.get_user_id("jim@jim.com")
+    check uid == uid2
+    check rs.is_email_verified(uid) == true
+    check rs.can_use_relay(uid) == true
+    let uid3 = rs.license_auth($license)
+    check uid3 == uid2
+
+test "disable Buckets license":
+  withinTmpDir:
+    var rs = newRelayServer("test.db", pubkey = SAMPLE_PUBLIC_KEY)
+    let license = createV1License(SAMPLE_PRIVATE_KEY, "jim@jim.com")
+    checkpoint "first license"
+    checkpoint $license
+    let uid = rs.license_auth($license)
+    rs.disable_most_recently_used_license(uid)
+    expect WrongPassword:
+      discard rs.license_auth($license)
+    sleep(1001)
+    let license2 = createV1License(SAMPLE_PRIVATE_KEY, "jim@jim.com")
+    checkpoint "second license"
+    checkpoint $license2
+    let uid2 = rs.license_auth($license2)
+    check uid == uid2

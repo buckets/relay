@@ -9,6 +9,8 @@ import std/logging
 import std/mimetypes
 import std/options; export options
 import std/os
+import std/sha1
+import std/sqlite3
 import std/strformat
 import std/strutils
 import std/tables
@@ -28,6 +30,7 @@ import ./netstring
 import ./proto
 import ./stringproto
 import ./mailer
+import ./licenses
 
 type
   WSClient = ref object
@@ -50,6 +53,7 @@ type
     userdb: Option[DbConn]
     http: RelayHttpServer
     mcontext*: proc(): mustache.Context
+    pubkey: string
 
   NotFound* = object of CatchableError
   WrongPassword* = object of CatchableError
@@ -59,6 +63,21 @@ const
   partialsDir = currentSourcePath.parentDir.parentDir / "partials"
   staticDir = currentSourcePath.parentDir.parentDir / "static"
   OPEN_REGISTRATION = defined(openregistration)
+  AUTH_LICENSE_PUBKEY* {.strdefine.} = ""
+  LICENSE_HASH_SALT {.strdefine.} = "yououghttochangethis"
+
+const versionSupport = static:
+  var jnode = %* {
+    "versions": [],
+  }
+  var authMethods = %* ["usernamepassword"]
+  when AUTH_LICENSE_PUBKEY != "":
+    authMethods.add newJString("v1license")
+  jnode["versions"].add(%* {
+    "version": "1",
+    "authMethods": authMethods,
+  })
+  $jnode
 
 var mimedb = newMimetypes()
 
@@ -137,11 +156,12 @@ proc `handler=`*(rhs: RelayHttpServer, handler: HttpAsyncCallback) =
   of false:
     rhs.httpServer.handler = handler
 
-proc newRelayServer*(dbfilename: string, updateSchema = true): RelayServer =
+proc newRelayServer*(dbfilename: string, updateSchema = true, pubkey = ""): RelayServer =
   new(result)
   result.relay = newRelay[WSClient]()
   result.dbfilename = dbfilename
   result.updateSchema = updateSchema
+  result.pubkey = pubkey
   result.mcontext = proc(): Context =
     result = newContext()
     result.addDefaultContext()
@@ -182,6 +202,7 @@ const userdbSchema = [
       pwhash TEXT NOT NULL,
       emailverified TINYINT DEFAULT 0,
       blocked TINYINT DEFAULT 0,
+      recentlicensehash TEXT DEFAULT '',
       UNIQUE(email)
     )""",
     """CREATE TABLE IF NOT EXISTS userlog (
@@ -206,6 +227,9 @@ const userdbSchema = [
       token TEXT,
       FOREIGN KEY (user_id) REFERENCES user(id)
     )""",
+    """CREATE TABLE IF NOT EXISTS disabledlicense (
+      licensehash TEXT PRIMARY KEY
+    )""",
   ])
 ]
 
@@ -216,6 +240,7 @@ proc db*(rs: RelayServer): DbConn =
   ## Get the user-data database for this server
   if not rs.userdb.isSome:
     var db = open(rs.dbfilename, "", "", "")
+    discard db.busy_timeout(1000)
     db.exec(sql"PRAGMA foreign_keys = ON")
     if rs.updateSchema:
       db.upgradeSchema(userdbSchema)
@@ -250,6 +275,30 @@ proc password_auth*(rs: RelayServer, email: LowerString, password: string): int6
     if crypto_pwhash_str_verify(pwhash, password):
       return user_id
   raise WrongPassword.newException("Wrong password")
+
+func strHash(lic: BucketsV1License, email: LowerString): string =
+  $secureHash(
+    $secureHash(LICENSE_HASH_SALT) & $secureHash(email.string) & $secureHash($lic)
+  )
+
+proc license_auth*(rs: RelayServer, license: string): int64 =
+  ## Return the userid if the license is valid, else raise an error
+  if rs.pubkey == "":
+    raise WrongPassword.newException("License auth not supported")
+  let lic = license.unformatLicense()
+  if lic.verify(rs.pubkey) == false:
+    raise WrongPassword.newException("Invalid license")
+  let email = lic.extractEmail().toLowercase()
+  let lichash = strHash(lic, email)
+  let disabled = rs.db.getRow(sql"SELECT count(*) FROM disabledlicense WHERE licensehash=?", lichash).get()[0].i
+  if disabled != 0:
+    raise WrongPassword.newException("License disabled")
+  try:
+    result = rs.get_user_id(email)
+  except NotFound:
+    # create the user
+    result = rs.db.insertID(sql"INSERT INTO user (email, pwhash, emailverified) VALUES (?, '', 1)", email)
+  rs.db.exec(sql"UPDATE user SET recentlicensehash=? WHERE id=?", lichash, result)
 
 proc is_email_verified*(rs: RelayServer, user_id: int64): bool =
   ## Return true if the user has verified their email address
@@ -329,6 +378,16 @@ proc unblock_user*(rs: RelayServer, user_id: int64) =
 proc unblock_user*(rs: RelayServer, email: LowerString) =
   ## Unblock a user's access to the relay
   rs.unblock_user(rs.get_user_id(email))
+
+proc disable_most_recently_used_license*(rs: RelayServer, uid: int64) =
+  ## Block the most recently-used license for a user
+  let lichash = try:
+    rs.db.getRow(sql"SELECT recentlicensehash FROM user WHERE id=?", uid).get()[0].s
+  except:
+    raise NotFound.newException("No such user")
+  if lichash == "":
+    raise NotFound.newException("User has not authenticated via license")
+  rs.db.exec(sql"INSERT INTO disabledlicense (licensehash) VALUES (?) ON CONFLICT DO NOTHING", lichash)
 
 proc can_use_relay*(rs: RelayServer, user_id: int64): bool =
   ## Return true if the user is allowed to use the relay
@@ -497,7 +556,10 @@ proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   let
     username = credentials[0]
     password = credentials[1]
-  return rs.password_auth(username, password)
+  if rs.pubkey != "" and username == "_license":
+    return rs.license_auth(password)
+  else:
+    return rs.password_auth(username, password)
 
 when defined(testmode):
   var allHttpRequests*: seq[HttpRequest]
@@ -669,16 +731,7 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   if path.startsWith("/v1"):
     await rs.handleRequestV1(req, "/v1")
   elif path == "/versions":
-    await req.sendResponse(Http200, data = $(%* {
-      "versions": [
-        {
-          "version": "1",
-          "authMethods": [
-            "usernamePassword",
-          ],
-        },
-      ]
-    }))
+    await req.sendResponse(Http200, data = versionSupport)
   elif path == "/":
     var headers = HttpTable.init()
     headers.add("Location", "/v1")

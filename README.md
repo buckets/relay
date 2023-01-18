@@ -13,7 +13,7 @@ This will launch the relay on the default port. Run `brelay --help` for more opt
 
 ## Registration
 
-Compiled with default configuration, the relay server does not allow for users to register and will log emails rather than sending them. Register users via `brelay adduser ...`
+Compiled with the defaults, the relay server does not allow for users to register and will log emails rather than sending them. Register users via `brelay adduser ...`
 
 To enable user registration and mailing:
 
@@ -28,6 +28,13 @@ A complete example:
 nimble install https://github.com/buckets/relay.git -d:openregistration -d:usepostmark -d:release
 POSTMARK_API_KEY="foobar" brelay server
 ```
+
+## Authentication via License
+
+Compiled with the defaults, the relay server only supports password authentication. If you'd like to enable anyone with a Buckets license to use the relay server do the following:
+
+1. Compile with `-d:AUTH_LICENSE_PUBKEY=PEM_FORMATTED_PUBKEY`
+2. Compile with `-d:LICENSE_HASH_SALT=thevalue` where `thevalue` is a random string of your choosing that is consistent between deployments. This is used to block compromised licenses.
 
 ## TLS
 

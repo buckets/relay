@@ -11,19 +11,37 @@ import chronos
 
 import relay/server
 
+proc getRelayServer(dbfilename: string): RelayServer =
+  newRelayServer(dbfilename, pubkey = AUTH_LICENSE_PUBKEY)
+
 proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): RelayServer =
   ## Start the relay server on the given port.
-  result = newRelayServer(dbfilename)
+  result = getRelayServer(dbfilename)
   let taddress = initTAddress(address, port.int)
   info &"Starting Buckets Relay on {taddress} ..."
   stderr.flushFile
   result.start(taddress)
 
 proc addverifieduser*(dbfilename, username, password: string) =
-  var rs = newRelayServer(dbfilename)
+  var rs = getRelayServer(dbfilename)
   let userid = rs.register_user(username, password)
   let token = rs.generate_email_verification_token(userid)
   doAssert rs.use_email_verification_token(userid, token) == true
+
+proc blockuser*(dbfilename, email: string) =
+  var rs = getRelayServer(dbfilename)
+  let uid = rs.get_user_id(email)
+  rs.block_user(uid)
+
+proc unblockuser*(dbfilename, email: string) =
+  var rs = getRelayServer(dbfilename)
+  let uid = rs.get_user_id(email)
+  rs.unblock_user(uid)
+
+proc blocklicense*(dbfilename, email: string) =
+  var rs = getRelayServer(dbfilename)
+  let uid = rs.get_user_id(email)
+  rs.disable_most_recently_used_license(uid)
 
 proc stats(dbfilename: string, days = 30): JsonNode =
   result = %* {
@@ -31,7 +49,7 @@ proc stats(dbfilename: string, days = 30): JsonNode =
     "users": [],
     "ips": [],
   }
-  var rs = newRelayServer(dbfilename, updateSchema = false)
+  var rs = newRelayServer(dbfilename, updateSchema = false, pubkey = AUTH_LICENSE_PUBKEY)
   for row in rs.top_data_users(20, days = days):
     result["users"].add(%* {
       "sent": row.data.sent,
@@ -64,18 +82,35 @@ when isMainModule:
     option("-d", "--database", help="User/stats database filename", default=some("buckets_relay.sqlite"))
     command("adduser"):
       help("Add a user")
-      arg("username", help="Email address/username of user")
+      arg("email", help="Email address of user")
       flag("--password-stdin", help="If given, read the password from stdin rather than from the terminal")
       run:
-        let username = opts.username
         var password = if opts.password_stdin:
             stdout.write("Password? ")
             stdout.flushFile
             stdin.readLine()
           else:
             $getpass("Password? ".cstring)
-        addverifieduser(opts.parentOpts.database, username, password)
-        echo "added user ", username
+        addverifieduser(opts.parentOpts.database, opts.email, password)
+        echo "added user ", opts.email
+    command("blockuser"):
+      help("Block a user from using the relay")
+      arg("email", help="Email address of user to block")
+      run:
+        blockuser(opts.parentOpts.database, opts.email)
+        echo "User blocked"
+    command("unblockuser"):
+      help("Unblock a previously blocked user")
+      arg("email", help="Email address of user to block")
+      run:
+        unblockuser(opts.parentOpts.database, opts.email)
+        echo "User unblocked"
+    command("disablelicense"):
+      help("Disable a user's most recently-used license")
+      arg("email", help="Email address of user")
+      run:
+        blocklicense(opts.parentOpts.database, opts.email)
+        echo "License disabled"
     command("stats"):
       help("Show some statistics")
       option("--days", help = "Show data for this number of days", default=some("30"))
