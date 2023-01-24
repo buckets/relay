@@ -1,0 +1,10 @@
+# ignore extensionless files
+*
+!/**/
+!*.*
+buckets_relay.sqlite
+*.public
+*.secret
+_tests
+!TODO
+fly.toml
