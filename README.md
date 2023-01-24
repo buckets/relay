@@ -48,7 +48,7 @@ nimble run brelay server
 
 ## Deployment to fly.io
 
-If you'd like to run a relay server on [fly.io](https://fly.io/), sign up for the service then do one of the following. If you'd like to host somewhere else, look at the Dockerfiles in `docker/`
+If you'd like to run a relay server on [fly.io](https://fly.io/), sign up for the service then do one of the following. If you'd like to host somewhere else, you could use the Dockerfiles in [docker/](./docker/) as a starting point.
 
 ### Single-user mode
 
