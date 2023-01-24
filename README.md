@@ -1,4 +1,4 @@
-[![.github/workflows/main.yml](https://github.com/buckets/relay/actions/workflows/main.yml/badge.svg?branch=master)](https://github.com/buckets/relay/actions/workflows/main.yml)
+[![.github/workflows/main.yml](https://github.com/buckets/relay/actions/workflows/main.yml/badge.svg)](https://github.com/buckets/relay/actions/workflows/main.yml)
 
 This repository contains the open source code for the [Buckets](https://www.budgetwithbuckets.com) relay server, which allows users to share budget data between their devices in an end-to-end encrypted way.
 
