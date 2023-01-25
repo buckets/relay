@@ -7,6 +7,7 @@ import std/base64
 import std/logging
 import std/options
 import std/strformat
+import std/random
 
 import chronos; export chronos
 import chronicles; export chronicles
@@ -18,6 +19,7 @@ import ./proto; export proto
 import ./stringproto
 
 const HEARTBEAT_INTERVAL = 50.seconds
+const HEARTBEAT_JITTER = 1000
 
 type
   RelayClient*[T] = ref object
@@ -69,7 +71,7 @@ proc keepAliveLoop(client: RelayClient) {.async.} =
   ## connection alive
   try:
     while true:
-      await sleepAsync(HEARTBEAT_INTERVAL)
+      await sleepAsync(HEARTBEAT_INTERVAL + rand(HEARTBEAT_JITTER).milliseconds)
       if client.wsopt.isSome:
         let ws = client.wsopt.get()
         when defined(verbose):
