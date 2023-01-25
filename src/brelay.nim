@@ -12,6 +12,28 @@ import chronos
 import relay/common
 import relay/server
 
+proc monitorMemory() {.async.} =
+  var
+    lastTotal = 0
+    lastOccupied = 0
+    lastFree = 0
+  while true:
+    let
+      newTotal = getTotalMem()
+      newOccupied = getOccupiedMem()
+      newFree = getFreeMem()
+      diffTotal = newTotal - lastTotal
+      diffOccupied = newOccupied - lastOccupied
+      diffFree = newFree - lastFree
+    debug "--- Memory report ---"
+    debug &"Total memory:     {newTotal:>10} <- {lastTotal:>10} diff {diffTotal:>10}"
+    debug &"Occupied memory:  {newOccupied:>10} <- {lastOccupied:>10} diff {diffOccupied:>10}"
+    debug &"Free memory:      {newFree:>10} <- {lastFree:>10} diff {diffFree:>10}"
+    lastTotal = newTotal
+    lastOccupied = newOccupied
+    lastFree = newFree
+    await sleepAsync(10.seconds)
+
 proc startRelaySingleUser*(port = 9001.Port, address = "127.0.0.1", username = "", password = ""): RelayServer {.singleuseronly.} =
   ## Start the relay server on the given port.
   result = newRelayServer(username, password)

@@ -24,6 +24,7 @@ import ndb/sqlite
 import stew/byteutils
 import websock/extensions/compression/deflate
 import websock/websock
+import websock/utf8dfa
 
 import ./common
 import ./dbschema
@@ -580,7 +581,7 @@ proc sendEvent*(c: WSClient, ev: RelayEvent) =
     when multiusermode:
       c.relayserver.log_user_data_recv(c.user_id, msg.len)
       c.relayserver.log_ip_data_recv(c.ip, msg.len)
-    asyncCheck c.ws.send(msg.toBytes, Opcode.Binary)
+    asyncSpawn c.ws.send(msg.toBytes, Opcode.Binary)
 
 proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WSClient =
   new(result)
@@ -590,26 +591,76 @@ proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WS
   result.ip = ip
   checkMem "end newWSClient"
 
-proc recvMsgNoBuffer*(ws: WSSession): Future[seq[byte]] {.async.} =
+proc recvMsgNoBuffer*(
+  ws: WSSession,
+  size = WSMaxMessageSize): Future[seq[byte]] {.async.} =
   ## Get the next websocket message without allocating a
   ## large buffer ahead of time
-  var res: seq[byte]
-  while true:
-    let frame = await ws.readFrame(ws.extensions)
-    ws.frame = frame
+  try:
+    var res: seq[byte]
     ws.first = true
-    var toRead = frame.length
-    while toRead > 0:
-      let pos = res.len.uint64
-      res.setLen(pos + toRead)
-      let read = await ws.recv(addr res[pos], toRead.int)
-      if read <= 0:
-        trace "Didn't read any bytes, stopping"
-        raise newException(WSClosedError, "WebSocket is closed!")
-      toRead -= read.uint64
-    if frame.fin:
-      ws.frame = nil
-      break
+    defer: ws.first = false
+    var fin = false
+    
+    while ws.readyState != ReadyState.Closed:
+      if isNil(ws.frame):
+        ws.frame = await ws.readFrame(ws.extensions)
+        ws.first = true
+
+      if isNil(ws.frame):
+        assert ws.readyState == ReadyState.Closed
+        trace "Closed connection, breaking"
+        break
+      
+      if ws.first:
+        ws.binary = ws.frame.opcode == Opcode.Binary # set binary flag
+        trace "Setting binary flag"
+
+      fin = ws.frame.fin
+      var toRead = ws.frame.length
+      
+      if res.len + toRead.int > size:
+        raise newException(WSMaxMessageSizeError, "Max message size exceeded")
+      
+      if toRead == 0:
+        ws.frame = nil
+        break
+
+      while toRead > 0:
+        let pos = res.len.uint64
+        res.setLen(pos + toRead)
+        let read = await ws.recv(addr res[pos], toRead.int)
+        
+        trace "Read message", size = read
+        if read <= 0:
+          trace "Didn't read any bytes, stopping"
+          raise newException(WSClosedError, "WebSocket is closed!")
+        toRead -= read.uint64
+
+        # no more frames
+        if isNil(ws.frame):
+          # fin = true
+          break
+
+      if isNil(ws.frame):
+        # fin = true
+        break
+
+    if not fin and ws.readyState == ReadyState.Closed:
+      # avoid reporting incomplete message
+      raise newException(WSClosedError, "WebSocket is closed!")
+
+    if not ws.binary and validateUTF8(res.toOpenArray(0, res.high)) == false:
+      raise newException(WSInvalidUTF8, "Invalid UTF8 sequence detected")
+
+    return res
+  except CatchableError as exc:
+    trace "Exception reading message", exc = exc.msg
+    ws.readyState = ReadyState.Closed
+    await ws.stream.closeWait()
+
+    raise exc
+
 
 proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   ## Perform HTTP basic authentication and return the

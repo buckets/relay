@@ -1,4 +1,6 @@
+import std/logging
 import std/macros
+import std/strformat
 
 import libsodium/sodium
 import libsodium/sodium_sizes
@@ -29,3 +31,19 @@ macro singleuseronly*(fn: untyped): untyped =
     fn
   else:
     newStmtList()
+
+#------------------------------------------------------------
+# Memory-checking helpers
+#------------------------------------------------------------
+var lastMem = getOccupiedMem()
+
+proc checkmem*(name: string) =
+  let newMem = getOccupiedMem()
+  let diffMem = newMem - lastMem
+  logging.debug &"[memory] {diffMem:>10} = {newMem:>10} <- {lastMem:>10}  {name}"
+  lastMem = newMem
+
+template checkMemGrowth(name: string, body: untyped): untyped =
+  let occ {.genSym.} = getOccupiedMem()
+  body
+  echo "Mem growth during: " & name & " " & $(getOccupiedMem() - occ)
