@@ -74,3 +74,110 @@ fly secrets set POSTMARK_API_KEY='your key' AUTH_LICENSE_PUBKEY='the key' LICENS
 | `POSTMARK_API_KEY` | API key from [Postmark](https://postmarkapp.com/) |
 | `AUTH_LICENSE_PUBKEY` | RSA public key of Buckets licenses. If empty, license authentication is disabled. |
 | `LICENSE_HASH_SALT` | A hashing salt for the case when a license needs to be disabled. Any random, but consistent value is fine. |
+
+## Protocol
+
+Relay clients communicate with the relay server using the following protocol. See [./src/relay/proto.nim](./src/relay/proto.nim) for more information, and [./src/relay/stringproto.nim](./src/relay/stringproto.nim) for encoding details.
+
+In summary, devices connect with websockets and exchange messages. Messages sent from client to server are called commands. Messages sent from server to client are called events.
+
+### Authentication
+
+Clients authenticate with the server in two ways:
+
+1. With a relay account via HTTP Basic authentication. This is used to group together a user's various clients and prevent abuse.
+2. With a public/private key. This is used to identify and connect individual clients.
+
+A single relay account can have multiple public/private keys; typically one for each device.
+
+### Client Commands
+
+Clients send the following commands:
+
+| Command      | Description |
+|--------------|-------------|
+| `Iam`        | In response to a `Who` event, proves that this client has the private key for their public key. |
+| `Connect`    | Asks the server for a connection to another client identified by the client's public key. |
+| `Disconnect` | Asks the server to disconnect a connection to another client. |
+| `SendData`   | Sends bytes to another client. |
+
+### Server Events
+
+The relay server sends the following events:
+
+| Event           | Description |
+|-----------------|-------------|
+| `Who`           | Challenge for authenticating a client's public/private keys |
+| `Authenticated` | Sent when a client successfully completes authentication |
+| `Connected`     | Sent when a client has connected to another client |
+| `Disconnected`  | Sent when a client has been disconnected from another client |
+| `Data`          | Data payload from another, connected client |
+| `Entered`       | Sent when a client within the same user account has authenticated to the relay |
+| `Exited`        | Sent when a client within the same user account has disconnected from the relay |
+| `ErrorEvent`    | Sent when errors happen with authentication, connection or message sending |
+
+### Sequences and Usage
+
+#### Authentication
+
+Authentication happens like this:
+
+1. On connection, server sends `Who(challenge=ABCD...)`
+2. Client responds with `Iam(pubkey=MYPK..., signature=SIGN...)`
+3. If the signature is correct, server sends `Authenticated`
+
+```
+Client           Relay
+ │                 │
+ │             Who │
+ │◄────────────────┤
+ │                 │
+ │ Iam             │
+ ├────────────────►│
+ │                 │
+ │  Authenticated  │
+ │◄────────────────┤
+ │                 │
+```
+
+#### Client-to-client connection
+
+After authenticating, clients connect to each other and send data like this:
+
+1. Alice sends `Connect(pubkey=BOBPK)`
+2. Bob sends `Connect(pubkey=ALICEPK)`
+3. Server sends Alice `Connected(pubkey=BOBPK)`
+4. Server sends Bob `Connected(pubkey=ALICEPK)`
+5. Alice sends data with `SendData(data=hello, pubkey=BOBPK)`
+6. Server sends Bob data with `Data(data=hello, sender=ALICEPK)`
+
+```
+Alice             Relay              Bob
+  │                 │                 │
+  ├───Authenticated─┼─Authenticated───┤
+  │                 │                 │
+  │Connect(Bob)     │                 │
+  ├────────────────►│ Connect(Alice)  │
+  │                 │◄────────────────┤
+  │                 │                 │
+  │ Connected(Bob)  │ Connected(Alice)│
+  │◄────────────────┼────────────────►│
+  │                 │                 │
+  │SendData(Bob)    │                 │
+  ├────────────────►│ Data(Alice)     │
+  │                 ├────────────────►│
+  │                 │                 │
+```
+
+#### Same-user presence notifications
+
+The relay server will announce client presence to all clients that use the same HTTP Auth credentials. For example, if both Alice and Bob signed in as `alicenbob@example.com` the following would happen:
+
+1. Alice finishes authenticating
+2. Bob finishes authenticating
+3. Server sends Alice `Entered(pubkey=BOBPK)`
+4. Server sends Bob `Entered(pubkey=ALICEPK)`
+5. Alice disconnects
+6. Server sends Bob `Exited(pubkey=ALICEPK)`
+
+

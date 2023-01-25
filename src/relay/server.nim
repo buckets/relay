@@ -588,6 +588,28 @@ proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WS
   result.relayserver = rs
   result.user_id = user_id
   result.ip = ip
+  checkMem "end newWSClient"
+
+proc recvMsgNoBuffer*(ws: WSSession): Future[seq[byte]] {.async.} =
+  ## Get the next websocket message without allocating a
+  ## large buffer ahead of time
+  var res: seq[byte]
+  while true:
+    let frame = await ws.readFrame(ws.extensions)
+    ws.frame = frame
+    ws.first = true
+    var toRead = frame.length
+    while toRead > 0:
+      let pos = res.len.uint64
+      res.setLen(pos + toRead)
+      let read = await ws.recv(addr res[pos], toRead.int)
+      if read <= 0:
+        trace "Didn't read any bytes, stopping"
+        raise newException(WSClosedError, "WebSocket is closed!")
+      toRead -= read.uint64
+    if frame.fin:
+      ws.frame = nil
+      break
 
 proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   ## Perform HTTP basic authentication and return the
@@ -648,7 +670,7 @@ proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
         var decoder = newNetstringDecoder()
         while ws.readyState != ReadyState.Closed:
           let buff = try:
-              await ws.recvMsg()
+              await ws.recvMsgNoBuffer()
             except:
               break
           when multiusermode:

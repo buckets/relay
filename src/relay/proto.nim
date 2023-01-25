@@ -12,6 +12,8 @@ import std/strformat
 import std/strutils
 import std/tables
 
+import ./common
+
 import libsodium/sodium
 import ndb/sqlite
 

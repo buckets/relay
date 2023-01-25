@@ -17,6 +17,8 @@ import ./netstring
 import ./proto; export proto
 import ./stringproto
 
+const HEARTBEAT_INTERVAL = 50.seconds
+
 type
   RelayClient*[T] = ref object
     keys: KeyPair
@@ -61,6 +63,22 @@ proc ws*(client: RelayClient): WSSession =
 
 proc send(ws: WSSession, cmd: RelayCommand) {.async.} =
   await ws.send(nsencode(dumps(cmd)).toBytes, Opcode.Binary)
+
+proc keepAliveLoop(client: RelayClient) {.async.} =
+  ## Start a loop that periodically issues a ping to keep the
+  ## connection alive
+  try:
+    while true:
+      await sleepAsync(HEARTBEAT_INTERVAL)
+      if client.wsopt.isSome:
+        let ws = client.wsopt.get()
+        when defined(verbose):
+          logging.debug "Sending ping..."
+        await ws.ping()
+      else:
+        break
+  except:
+    logging.error "unexpected error in ws keepAliveLoop: " & getCurrentExceptionMsg()
 
 proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.async.} =
   var decoder = newNetstringDecoder()
@@ -173,6 +191,7 @@ proc connect*(client: RelayClient, url: string) {.async.} =
   ), client)
   var authenticated = newFuture[void]("relay.client.dial.authenticated")
   client.done = client.loop(authenticated)
+  asyncSpawn client.keepAliveLoop()
   await authenticated
 
 proc connect*(client: RelayClient, pubkey: PublicKey) {.async, raises: [RelayNotConnected].} =
