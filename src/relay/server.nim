@@ -341,7 +341,10 @@ proc license_auth*(rs: RelayServer, license: string): int64 {.multiuseronly.} =
   except NotFound:
     # create the user
     result = rs.db.insertID(sql"INSERT INTO user (email, pwhash, emailverified) VALUES (?, '', 1)", email)
-  rs.db.exec(sql"UPDATE user SET recentlicensehash=? WHERE id=?", lichash, result)
+  # disable former passwords
+  rs.db.exec(sql"UPDATE user SET pwhash='' WHERE recentlicensehash='' AND id=?", result)
+  # add license
+  rs.db.exec(sql"UPDATE user SET recentlicensehash=?, emailverified=1 WHERE id=?", lichash, result)
 
 proc is_email_verified*(rs: RelayServer, user_id: int64): bool {.multiuseronly.} =
   ## Return true if the user has verified their email address
