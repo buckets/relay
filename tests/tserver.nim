@@ -170,3 +170,38 @@ when multiusermode:
       checkpoint $license2
       let uid2 = rs.license_auth($license2)
       check uid == uid2
+  
+  test "auth w/ password, then license, should disable password":
+    withinTmpDir:
+      var rs = newRelayServer("test.db", pubkey = SAMPLE_PUBLIC_KEY)
+      let uid = rs.register_user("jim@jim.com", "password")
+      check rs.is_email_verified(uid) == false
+      check rs.can_use_relay(uid) == false
+      check rs.password_auth("jim@jim.com", "password") == uid
+      expect WrongPassword:
+        discard rs.password_auth("jim@jim.com", "something else")
+
+      let license = createV1License(SAMPLE_PRIVATE_KEY, "jim@jim.com")
+      let uid2 = rs.license_auth($license)
+      check uid == uid2
+      check rs.is_email_verified(uid2) == true
+      check rs.can_use_relay(uid2) == true
+
+      # The password is invalidated by the license authentication
+      # to prevent preemptive account takeover. Without this,
+      # an attacker could register a user, setting a password,
+      # but not verify the email address. Then, when the user
+      # authenticates with a license it counts that as
+      # email verification and the password chosen by the attacker
+      # would work.
+      expect WrongPassword:
+        discard rs.password_auth("jim@jim.com", "password")
+      let t1 = rs.generate_password_reset_token("jim@jim.com")
+      check rs.user_for_password_reset_token(t1).get() == uid
+      rs.update_password_with_token(t1, "newpassword")
+
+      # Now, both password and license auth work
+      check rs.password_auth("jim@jim.com", "newpassword") == uid
+      check rs.license_auth($license) == uid
+      check rs.password_auth("jim@jim.com", "newpassword") == uid
+      check rs.license_auth($license) == uid
