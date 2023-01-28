@@ -50,7 +50,7 @@ when singleusermode:
     withinTmpDir:
       let relayurl = "http://127.0.0.1:9001/v1/relay"
       tlog "Starting relay ..."
-      let server = startRelaySingleUser(9001.Port, "127.0.0.1", "alice", "password")
+      let server = startRelaySingleUser("alice", "password", 9001.Port, "127.0.0.1")
       tlog "Generating keys ..."
       let akeys = genkeys()
       let bkeys = genkeys()
