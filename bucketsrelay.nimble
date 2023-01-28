@@ -5,8 +5,7 @@ author        = "Matt Haggard"
 description   = "The relay service for the Buckets budgeting app"
 license       = "MIT"
 srcDir        = "src"
-installExt    = @["nim"]
-installDirs   = @["partials", "static"]
+installExt    = @["nim", "mustache", "png"]
 bin           = @["brelay", "bclient"]
 
 

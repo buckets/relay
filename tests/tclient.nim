@@ -8,9 +8,9 @@ import std/strutils
 
 import ./util
 
-import relay/common
-import relay/client
-import relay/server
+import bucketsrelay/common
+import bucketsrelay/client
+import bucketsrelay/server
 
 type
   ClientHandler = ref object

@@ -11,9 +11,9 @@ import std/os
 
 import chronos
 
-import relay/client
-import relay/proto
-import relay/asyncstdin
+import bucketsrelay/client
+import bucketsrelay/proto
+import bucketsrelay/asyncstdin
 
 type
   SendHandler = ref object

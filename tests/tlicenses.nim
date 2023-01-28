@@ -1,7 +1,7 @@
 import std/strutils
 import std/unittest
 
-import relay/licenses
+import bucketsrelay/licenses
 
 const PRIVATEKEY1 = """
 -----BEGIN RSA PRIVATE KEY-----

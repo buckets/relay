@@ -37,4 +37,11 @@ jobs:
       run: nimble -d:relaysingleusermode install -y
     - name: Run tests (single user mode)
       run: nimble -d:relaysingleusermode test
-        
+
+docker:
+  runs-on: ubuntu-latest
+  steps:
+  - uses: actions/checkout@v1
+  - run: docker build --file docker/singleuser.Dockerfile .
+  - run: docker build --file docker/multiuser.Dockerfile .
+

@@ -9,8 +9,8 @@ import std/json
 
 import chronos
 
-import relay/common
-import relay/server
+import bucketsrelay/common
+import bucketsrelay/server
 
 proc monitorMemory() {.async.} =
   var
@@ -111,7 +111,7 @@ when isMainModule:
   newConsoleLogger(lvlAll, useStderr = true).addHandler()
   when multiusermode:
     var p = newParser:
-      option("-d", "--database", help="User/stats database filename", default=some("buckets_relay.sqlite"))
+      option("-d", "--database", help="User/stats database filename", default=some("bucketsrelay.sqlite"))
       command("adduser"):
         help("Add a user")
         arg("email", help="Email address of user")

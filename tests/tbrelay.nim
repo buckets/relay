@@ -7,8 +7,8 @@ import chronos
 import brelay
 import bclient
 
-import relay/common
-import relay/proto
+import bucketsrelay/common
+import bucketsrelay/proto
 
 proc tlog(msg: string) =
   debug "TEST: " & msg
