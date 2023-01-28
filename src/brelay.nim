@@ -34,7 +34,7 @@ proc monitorMemory() {.async.} =
     lastFree = newFree
     await sleepAsync(10.seconds)
 
-proc startRelaySingleUser*(port = 9001.Port, address = "127.0.0.1", username = "", password = ""): RelayServer {.singleuseronly.} =
+proc startRelaySingleUser*(username, password: string, port = 9001.Port, address = "127.0.0.1"): RelayServer {.singleuseronly.} =
   ## Start the relay server on the given port.
   result = newRelayServer(username, password)
   let taddress = initTAddress(address, port.int)
