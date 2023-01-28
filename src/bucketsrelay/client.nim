@@ -25,7 +25,7 @@ type
   RelayClient*[T] = ref object
     keys: KeyPair
     wsopt: Option[WSSession]
-    handler: T
+    handler*: T
     username: string
     password: string
     verifyHostname: bool
