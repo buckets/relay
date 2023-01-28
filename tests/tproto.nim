@@ -10,7 +10,7 @@ import tables
 import sets
 import logging
 
-import relay/proto
+import bucketsrelay/proto
 import libsodium/sodium
 import ./util
 

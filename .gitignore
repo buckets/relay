@@ -2,7 +2,7 @@
 *
 !/**/
 !*.*
-buckets_relay.sqlite
+bucketsrelay.sqlite
 *.public
 *.secret
 _tests

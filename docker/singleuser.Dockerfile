@@ -3,7 +3,7 @@ FROM nimlang/nim:1.6.10-alpine@sha256:408ebac99ad2d170a59e7a09c10e82e7336cf71fa3
 WORKDIR /app
 RUN apk update && apk add libsodium-static libsodium musl-dev
 RUN nimble refresh
-COPY buckets_relay.nimble .
+COPY bucketsrelay.nimble .
 RUN nimble install -y --depsOnly --verbose
 COPY . .
 COPY docker/config.nims .

@@ -6,8 +6,8 @@
 import unittest
 import strformat
 
-import relay/proto
-import relay/stringproto
+import bucketsrelay/proto
+import bucketsrelay/stringproto
 
 proc cev(ev: RelayEvent) =
   doAssert ev == ev

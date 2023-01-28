@@ -9,8 +9,8 @@ import std/json
 
 import chronos
 
-import relay/common
-import relay/server
+import bucketsrelay/common
+import bucketsrelay/server
 
 proc monitorMemory() {.async.} =
   var
@@ -34,7 +34,7 @@ proc monitorMemory() {.async.} =
     lastFree = newFree
     await sleepAsync(10.seconds)
 
-proc startRelaySingleUser*(port = 9001.Port, address = "127.0.0.1", username = "", password = ""): RelayServer {.singleuseronly.} =
+proc startRelaySingleUser*(username, password: string, port = 9001.Port, address = "127.0.0.1"): RelayServer {.singleuseronly.} =
   ## Start the relay server on the given port.
   result = newRelayServer(username, password)
   let taddress = initTAddress(address, port.int)
@@ -111,7 +111,7 @@ when isMainModule:
   newConsoleLogger(lvlAll, useStderr = true).addHandler()
   when multiusermode:
     var p = newParser:
-      option("-d", "--database", help="User/stats database filename", default=some("buckets_relay.sqlite"))
+      option("-d", "--database", help="User/stats database filename", default=some("bucketsrelay.sqlite"))
       command("adduser"):
         help("Add a user")
         arg("email", help="Email address of user")
@@ -162,7 +162,7 @@ when isMainModule:
         option("-p", "--port", help="Port to run server on", default=some("9001"))
         option("-a", "--address", help="Address to run on", default=some("127.0.0.1"))
         option("-u", "--username", help="Username", env = "RELAY_USERNAME")
-        option("-p", "--password", help="Password", env = "RELAY_PASSWORD")
+        option("-P", "--password", help="Password", env = "RELAY_PASSWORD")
         run:
           var server = startRelaySingleUser(opts.username, opts.password, opts.port.parseInt.Port, opts.address)
           runForever()

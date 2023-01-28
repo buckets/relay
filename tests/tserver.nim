@@ -9,9 +9,9 @@ import ./util
 
 import chronos
 
-import relay/common
-import relay/server
-import relay/licenses
+import bucketsrelay/common
+import bucketsrelay/server
+import bucketsrelay/licenses
 
 when multiusermode:
   test "add user":

@@ -1,6 +1,6 @@
 import std/unittest
 
-import relay/netstring
+import bucketsrelay/netstring
 
 test "nsencode":
   check nsencode("apple") == "5:apple,"

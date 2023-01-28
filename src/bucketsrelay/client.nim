@@ -25,7 +25,7 @@ type
   RelayClient*[T] = ref object
     keys: KeyPair
     wsopt: Option[WSSession]
-    handler: T
+    handler*: T
     username: string
     password: string
     verifyHostname: bool
@@ -100,7 +100,6 @@ proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.asyn
       decoder.consume(data)
       while decoder.hasMessage():
         let ev = loadsRelayEvent(decoder.nextMessage())
-        debug "client recv: " & ev.dbg
         case ev.kind
         of Who:
           await ws.send(RelayCommand(
@@ -136,7 +135,8 @@ proc addHeadersHook(addheaders: HttpTable): Hook =
     ok()
 
 proc connect*(client: RelayClient, url: string) {.async.} =
-  ## Connect and authenticate with a relay server
+  ## Connect and authenticate with a relay server. Returns
+  ## after authentication succeeds.
   var uri = parseUri(url)
   if uri.scheme == "http":
     uri.scheme = "ws"
