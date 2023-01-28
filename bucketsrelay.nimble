@@ -11,7 +11,7 @@ bin           = @["brelay", "bclient"]
 
 # Dependencies
 
-requires "argparse == 2.0.1"
+requires "argparse == 4.0.1"
 requires "libsodium == 0.6.0"
 requires "mustache == 0.4.3"
 requires "ndb == 0.19.9"
