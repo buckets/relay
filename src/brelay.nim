@@ -162,7 +162,7 @@ when isMainModule:
         option("-p", "--port", help="Port to run server on", default=some("9001"))
         option("-a", "--address", help="Address to run on", default=some("127.0.0.1"))
         option("-u", "--username", help="Username", env = "RELAY_USERNAME")
-        option("-p", "--password", help="Password", env = "RELAY_PASSWORD")
+        option("-P", "--password", help="Password", env = "RELAY_PASSWORD")
         run:
           var server = startRelaySingleUser(opts.username, opts.password, opts.port.parseInt.Port, opts.address)
           runForever()
