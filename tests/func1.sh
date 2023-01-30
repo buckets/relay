@@ -1,5 +1,25 @@
 #!/bin/sh
 
+waitForOpenPort() {
+
+  PORT=$1
+  HOSTTOCHECK="127.0.0.1"
+  TIMEOUT=5
+  echo "Waiting for $HOSTTOCHECK:$PORT to open"
+  sleep "$TIMEOUT" &
+  SLEEPPID=$!
+  while ! nc -z "$HOSTTOCHECK" "$PORT"; do
+    sleep 0.1
+    if ! kill -0 "$SLEEPPID" 2>/dev/null; then
+      echo "Timed out waiting for $HOSTTOCHECK:$PORT to open"
+      return 1
+    fi
+  done
+  kill "$SLEEPPID" 2>/dev/null
+  echo "Port $HOSTTOCHECK:$PORT is open!"
+  return 0
+}
+
 dotest() {
   echo "Adding a user ..."
   printf 'foobar' | brelay adduser me@me.com --password-stdin
@@ -13,6 +33,8 @@ dotest() {
   brelay server --port 8080 &
   CHILDPID=$!
   trap "kill $CHILDPID" exit
+
+  waitForOpenPort 8080
 
   echo "Starting the clients ..."
   printf "hello, world" > client2/testfile

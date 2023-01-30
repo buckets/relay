@@ -24,7 +24,6 @@ import ndb/sqlite
 import stew/byteutils
 import websock/extensions/compression/deflate
 import websock/websock
-import websock/utf8dfa
 
 import ./common
 import ./dbschema
@@ -52,6 +51,7 @@ type
     relay: Relay[WSClient]
     http: RelayHttpServer
     mcontext*: proc(): mustache.Context
+    longrunservices: seq[Future[void]]
     when multiusermode:
       pubkey: string
       dbfilename: string
@@ -254,6 +254,7 @@ proc db*(rs: RelayServer): DbConn {.multiuseronly.} =
   rs.userdb.get()
 
 proc newRelayServer*(dbfilename: string, updateSchema = true, pubkey = ""): RelayServer {.multiuseronly.} =
+  ## Make a new multi-user relay server
   new(result)
   result.relay = newRelay[WSClient]()
   result.mcontext = proc(): Context =
@@ -264,7 +265,12 @@ proc newRelayServer*(dbfilename: string, updateSchema = true, pubkey = ""): Rela
   result.pubkey = pubkey
   discard result.db()
 
+proc stop*(rs: RelayServer) {.async.} =
+  for fut in rs.longrunservices:
+    await fut.cancelAndWait()
+
 proc newRelayServer*(username, password: string): RelayServer {.singleuseronly.} =
+  ## Make a new single-user relay server
   new(result)
   result.relay = newRelay[WSClient]()
   result.mcontext = proc(): Context =
@@ -548,6 +554,22 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
   for row in rows:
     result.add((row[0].s, (row[1].i.int, row[2].i.int)))
 
+proc delete_old_stats*(rs: RelayServer, keep_days = 90) {.gcsafe, multiuseronly.} =
+  ## Remote stats older than `keep_days` days
+  logging.info "Deleting stats older than " & $keep_days & "days"
+  {.gcsafe.}:
+    rs.db.exec(sql"DELETE FROM iplog WHERE day < date('now', '-' || ? || ' day')", keep_days)
+    rs.db.exec(sql"DELETE FROM userlog WHERE day < date('now', '-' || ? || ' day')", keep_days)
+
+proc clear_stat_loop(rs: RelayServer) {.async, multiuseronly.} =
+  while true:
+    await sleepAsync(24.hours)
+    rs.delete_old_stats()
+
+proc periodically_delete_old_stats*(rs: RelayServer) {.multiuseronly.} =
+  ## Delete old stats at a regular interval
+  rs.longrunservices.add(rs.clear_stat_loop())
+
 #-------------------------------------------------------------
 # Common HTTP helpers
 #-------------------------------------------------------------
@@ -822,17 +844,17 @@ proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     else:
       await req.sendError(Http404)
 
-proc start*(rs: RelayServer, address: TransportAddress) =
+proc start*(rs: RelayServer, address: TransportAddress, tlsPrivateKey = "", tlsCertificate = "") =
   ## Start the relay server at the given address.
   let
     socketFlags = {ServerFlags.TcpNoDelay, ServerFlags.ReuseAddr}
-  when defined tls:
+  if tlsPrivateKey != "" and tlsCertificate != "":
     rs.http = RelayHttpServer(
       tls: true,
       httpsServer: TlsHttpServer.create(
         address = address,
-        tlsPrivateKey = TLSPrivateKey.init(SecureKey),
-        tlsCertificate = TLSCertificate.init(SecureCert),
+        tlsPrivateKey = TLSPrivateKey.init(tlsPrivateKey),
+        tlsCertificate = TLSCertificate.init(tlsCertificate),
         flags = socketFlags)
     )
   else:
