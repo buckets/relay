@@ -52,6 +52,7 @@ proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): R
   info &"Starting Buckets Relay on {taddress} ..."
   stderr.flushFile
   result.start(taddress)
+  result.periodically_delete_old_stats()
 
 proc addverifieduser*(dbfilename, username, password: string) {.multiuseronly.} =
   var rs = getRelayServer(dbfilename)
