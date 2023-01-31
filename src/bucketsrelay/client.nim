@@ -33,14 +33,11 @@ type
   
   ClientLifeEventKind* = enum
     ConnectedToServer
-    LocalError
     DisconnectedFromServer
   
   ClientLifeEvent* = ref object
     case kind*: ClientLifeEventKind
     of ConnectedToServer:
-      discard
-    of LocalError:
       discard
     of DisconnectedFromServer:
       discard
