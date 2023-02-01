@@ -627,13 +627,17 @@ proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   let
     username = credentials[0]
     password = credentials[1]
-  when multiusermode:
-    if rs.pubkey != "" and username == "_license":
-      return rs.license_auth(password)
+  try:
+    when multiusermode:
+      if rs.pubkey != "" and username == "_license":
+        return rs.license_auth(password)
+      else:
+        return rs.password_auth(username, password)
     else:
       return rs.password_auth(username, password)
-  else:
-    return rs.password_auth(username, password)
+  except WrongPassword:
+    logging.debug "WrongPassword: " & getCurrentExceptionMsg()
+    raise
 
 when defined(testmode):
   var allHttpRequests*: seq[HttpRequest]
