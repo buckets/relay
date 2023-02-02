@@ -98,7 +98,7 @@ type
   Relay*[T] = ref object
     conns: TableRef[PublicKey, RelayConnection[T]]
     channels: TableRef[string, HashSet[PublicKey]]
-    conn_requests: TableRef[PublicKey, seq[PublicKey]]
+    conn_requests: TableRef[PublicKey, HashSet[PublicKey]]
     db: DbConn
   
   RelayErr* = object of CatchableError
@@ -107,7 +107,7 @@ proc newRelay*[T](): Relay[T] =
   new(result)
   result.conns = newTable[PublicKey, RelayConnection[T]]()
   result.channels = newTable[string, HashSet[PublicKey]]()
-  result.conn_requests = newTable[PublicKey, seq[PublicKey]]()
+  result.conn_requests = newTable[PublicKey, HashSet[PublicKey]]()
 
 proc `$`*(a: PublicKey): string =
   a.string.encode()
@@ -261,23 +261,21 @@ proc connectPair[T](a, b: var RelayConnection[T]) =
   b.sendEvent(RelayEvent(kind: Connected, conn_pubkey: a.pubkey))
 
 proc addConnRequest(relay: var Relay, alice_pubkey: PublicKey, bob_pubkey: PublicKey) =
-  ## Add or fulfil a connection request.
+  ## Add or fulfil a connection request from alice to bob
   var alice = relay.conns[alice_pubkey]
+  relay.conn_requests.mgetOrPut(alice_pubkey, initHashSet[PublicKey]()).incl(bob_pubkey)
   if bob_pubkey in alice.peer_connections:
     # They're already connected
     return
-  
-  var bob_requests = relay.conn_requests.getOrDefault(bob_pubkey, @[])
+  var bob_requests = relay.conn_requests.getOrDefault(bob_pubkey, initHashSet[PublicKey]())
   if alice_pubkey in bob_requests:
-    # They both want to connect. Connect them!
-    bob_requests.delete(bob_requests.find(alice_pubkey))
+    # They both want to connect!
     var bob = relay.conns[bob_pubkey]
     connectPair(alice, bob)
-    return
-  else:
-    # Alice wants to connect with Bob, but he hasn't indicated
-    # that he wants to connect yet.
-    relay.conn_requests.mgetOrPut(alice_pubkey, @[]).add(bob_pubkey)
+
+proc removeConnRequest(relay: var Relay, alice_pubkey: PublicKey, bob_pubkey: PublicKey) =
+  ## Remove a connection request from alice to bob
+  relay.conn_requests.mgetOrPut(alice_pubkey, initHashSet[PublicKey]()).excl(bob_pubkey)
 
 proc removeConnection*[T](relay: var Relay[T], conn: RelayConnection[T]) =
   ## Remove a conn from the relay if it exists.
@@ -354,6 +352,7 @@ proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: R
     else:
       relay.addConnRequest(conn.pubkey, command.conn_pubkey)
   of Disconnect:
+    relay.removeConnRequest(conn.pubkey, command.dcon_pubkey)
     if command.dcon_pubkey notin conn.peer_connections:
       conn.sendError "No such connection"
     else:

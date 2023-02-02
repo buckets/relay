@@ -219,6 +219,23 @@ test "disconnect command":
   check bob.popEvent(Disconnected).dcon_pubkey == alice.pubkey
   check alice.popEvent(Disconnected).dcon_pubkey == bob.pubkey
 
+test "remember connection requests":
+  var relay = newRelay[StringClient]()
+  var alice = relay.mkConnection()
+  var bob = relay.mkConnection()
+  relay.handleCommand(alice, RelayCommand(kind: Connect, conn_pubkey: bob.pubkey))
+  relay.handleCommand(bob, RelayCommand(kind: Connect, conn_pubkey: alice.pubkey))
+  discard alice.popEvent(Connected)
+  discard bob.popEvent(Connected)
+
+  relay.handleCommand(alice, RelayCommand(kind: Disconnect, dcon_pubkey: bob.pubkey))
+  check bob.popEvent(Disconnected).dcon_pubkey == alice.pubkey
+  check alice.popEvent(Disconnected).dcon_pubkey == bob.pubkey
+
+  relay.handleCommand(alice, RelayCommand(kind: Connect, conn_pubkey: bob.pubkey))
+  discard alice.popEvent(Connected)
+  discard bob.popEvent(Connected)
+
 test "pub/sub":
   var relay = newRelay[StringClient]()
   var alice = relay.mkConnection(channel = "alicenbob")
