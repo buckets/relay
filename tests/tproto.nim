@@ -236,6 +236,25 @@ test "remember connection requests":
   discard alice.popEvent(Connected)
   discard bob.popEvent(Connected)
 
+test "forget connection requests on disconnect":
+  var relay = newRelay[StringClient]()
+  var alice = relay.mkConnection()
+  var bob = relay.mkConnection()
+  relay.handleCommand(alice, RelayCommand(kind: Connect, conn_pubkey: bob.pubkey))
+  relay.handleCommand(bob, RelayCommand(kind: Connect, conn_pubkey: alice.pubkey))
+  discard alice.popEvent(Connected)
+  discard bob.popEvent(Connected)
+
+  relay.handleCommand(alice, RelayCommand(kind: Disconnect, dcon_pubkey: bob.pubkey))
+  check bob.popEvent(Disconnected).dcon_pubkey == alice.pubkey
+  check alice.popEvent(Disconnected).dcon_pubkey == bob.pubkey
+
+  relay.handleCommand(bob, RelayCommand(kind: Disconnect, dcon_pubkey: alice.pubkey))
+  relay.handleCommand(alice, RelayCommand(kind: Connect, conn_pubkey: bob.pubkey))
+  relay.sendData(alice, bob.pubkey, "something")
+  discard alice.popEvent(ErrorEvent)
+  check bob.sender.received.len == 0
+
 test "pub/sub":
   var relay = newRelay[StringClient]()
   var alice = relay.mkConnection(channel = "alicenbob")

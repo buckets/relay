@@ -353,9 +353,7 @@ proc handleCommand*[T](relay: var Relay[T], conn: RelayConnection[T], command: R
       relay.addConnRequest(conn.pubkey, command.conn_pubkey)
   of Disconnect:
     relay.removeConnRequest(conn.pubkey, command.dcon_pubkey)
-    if command.dcon_pubkey notin conn.peer_connections:
-      conn.sendError "No such connection"
-    else:
+    if command.dcon_pubkey in conn.peer_connections:
       if command.dcon_pubkey in relay.conns:
         var other = relay.conns[command.dcon_pubkey]
         # disassociate
