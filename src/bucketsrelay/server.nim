@@ -15,7 +15,7 @@ import std/strformat
 import std/strutils
 import std/tables
 
-import chronicles
+import chronicles except debug, info, warn, error
 import chronos
 import httputils
 import libsodium/sodium
@@ -35,10 +35,12 @@ import ./licenses
 
 type
   WSClient = ref object
+    debugname*: string
     ws: WSSession
     user_id: int64
     ip: string
     relayserver: RelayServer
+    eventQueue: AsyncQueue[RelayEvent]
 
   RelayHttpServer = ref object
     case tls: bool
@@ -48,10 +50,13 @@ type
       httpServer: HttpServer
 
   RelayServer* = ref object
+    debugname*: string
+    nextid: int
     relay: Relay[WSClient]
     http: RelayHttpServer
     mcontext*: proc(): mustache.Context
     longrunservices: seq[Future[void]]
+    runningRequests: TableRef[int, HttpRequest]
     when multiusermode:
       pubkey: string
       dbfilename: string
@@ -68,7 +73,6 @@ type
 const
   partialsDir = currentSourcePath.parentDir.parentDir / "partials"
   staticDir = currentSourcePath.parentDir.parentDir / "static"
-  verbose = defined(verbose)
 
 when multiusermode:
   let
@@ -87,13 +91,6 @@ const versionSupport = static:
     "authMethods": authMethods,
   })
   $jnode
-
-template vlog(x: untyped): untyped =
-  when verbose:
-    logging.debug "V ", x
-    stderr.flushFile()
-  else:
-    discard
 
 var mimedb = newMimetypes()
 
@@ -136,6 +133,9 @@ else:
       readFile(fullpath)
     else:
       raise NotFound.newException("No such file: " & path)
+
+template logname*(rs: RelayServer): string =
+  "(" & rs.debugname & ") "
 
 proc start*(rhs: RelayHttpServer) =
   case rhs.tls
@@ -263,11 +263,18 @@ proc newRelayServer*(dbfilename: string, updateSchema = true, pubkey = ""): Rela
   result.dbfilename = dbfilename
   result.updateSchema = updateSchema
   result.pubkey = pubkey
+  result.runningRequests = newTable[int, HttpRequest]()
   discard result.db()
+  result.debugname = "RelayServer" & nextDebugName()
 
 proc stop*(rs: RelayServer) {.async.} =
   for fut in rs.longrunservices:
     await fut.cancelAndWait()
+  for req in rs.runningRequests.values():
+    try:
+      await req.sendError(Http503)
+    except:
+      discard
 
 proc newRelayServer*(username, password: string): RelayServer {.singleuseronly.} =
   ## Make a new single-user relay server
@@ -278,6 +285,7 @@ proc newRelayServer*(username, password: string): RelayServer {.singleuseronly.}
     result.addDefaultContext()
   result.usernameHash = hash_password(username)
   result.passwordHash = hash_password(password)
+  result.runningRequests = newTable[int, HttpRequest]()
 
 proc get_user_id*(rs: RelayServer, email: LowerString): int64 {.multiuseronly.} =
   ## Get a user's id from their email
@@ -288,20 +296,16 @@ proc get_user_id*(rs: RelayServer, email: LowerString): int64 {.multiuseronly.} 
 
 proc register_user*(rs: RelayServer, email: LowerString, password: string): int64 {.multiuseronly.} =
   ## Register a user with a password
-  vlog "[register_user] start"
   let pwhash = try:
     hash_password(password)
   except:
-    logging.error "Error hashing password: " & getCurrentExceptionMsg()
+    logging.error "Error hashing password", getCurrentExceptionMsg()
     raise CatchableError.newException("Crypto error")
-  vlog "[register_user] pw hashed"
   try:
-    vlog "[register_user] inserting into db"
     result = rs.db.insertID(sql"INSERT INTO user (email, pwhash) VALUES (?,?)",
       email, pwhash)
-    vlog "[register_user] inserted"
   except:
-    logging.error "[register_user] " & getCurrentExceptionMsg()
+    logging.error rs.logname, "failed registering", getCurrentExceptionMsg()
     raise DuplicateUser.newException("Account already exists")
 
 proc password_auth*(rs: RelayServer, email: LowerString, password: string): int64 {.multiuseronly.} =
@@ -556,7 +560,7 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
 
 proc delete_old_stats*(rs: RelayServer, keep_days = 90) {.gcsafe, multiuseronly.} =
   ## Remote stats older than `keep_days` days
-  logging.info "Deleting stats older than " & $keep_days & "days"
+  info "Deleting stats older than " & $keep_days & "days"
   {.gcsafe.}:
     rs.db.exec(sql"DELETE FROM iplog WHERE day < date('now', '-' || ? || ' day')", keep_days)
     rs.db.exec(sql"DELETE FROM userlog WHERE day < date('now', '-' || ? || ' day')", keep_days)
@@ -599,14 +603,12 @@ proc sendHTML(req: HttpRequest, data: string) {.async.} =
 # Version 1
 #-------------------------------------------------------------
 
+template logname*(c: WSClient): string =
+  "(" & c.debugname & ") "
+
 proc sendEvent*(c: WSClient, ev: RelayEvent) =
-  ## Send an event to a single ws client
-  if not c.ws.isNil:
-    let msg = nsencode(dumps(ev))
-    when multiusermode:
-      c.relayserver.log_user_data_recv(c.user_id, msg.len)
-      c.relayserver.log_ip_data_recv(c.ip, msg.len)
-    asyncSpawn c.ws.send(msg.toBytes, Opcode.Binary)
+  ## Queue an event to a single ws client
+  c.eventQueue.addLastNoWait(ev)
 
 proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WSClient =
   new(result)
@@ -614,6 +616,11 @@ proc newWSClient(rs: RelayServer, ws: WSSession, user_id: int64, ip: string): WS
   result.relayserver = rs
   result.user_id = user_id
   result.ip = ip
+  result.eventQueue = newAsyncQueue[RelayEvent]()
+  result.debugname = "WSClient" & nextDebugName()
+
+proc closeWait(c: WSClient) {.async.} =
+  c.ws = nil
 
 proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   ## Perform HTTP basic authentication and return the
@@ -636,7 +643,7 @@ proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
     else:
       return rs.password_auth(username, password)
   except WrongPassword:
-    logging.debug "WrongPassword: " & getCurrentExceptionMsg()
+    info rs.logname, "WrongPassword: " & getCurrentExceptionMsg()
     raise
 
 when defined(testmode):
@@ -645,18 +652,18 @@ when defined(testmode):
 proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
   # Perform HTTP basic authenciation
   {.gcsafe.}:
-    vlog "[ws.relay] starting..."
+    vlog rs.logname, "starting..."
     let user_id = block:
       try:
-        vlog "[ws.relay] authenticating..."
+        vlog "authenticating..."
         rs.authenticate(req)
       except:
         await req.sendError(Http403)
         return
-    vlog "[ws.relay] auth ok"
+    vlog rs.logname, "auth ok"
     when multiusermode:
       if not rs.can_use_relay(user_id):
-        info &"User {user_id} blocked from using relay"
+        info rs.logname, "Blocked from relay: " & $user_id
         await req.sendError(Http403)
         return
     let ip = req.ipAddress()
@@ -666,38 +673,56 @@ proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
     try:
       let deflateFactory = deflateFactory()
       let server = WSServer.new(factories = [deflateFactory])
-      vlog "[ws.relay] opening WS..."
+      vlog rs.logname, "opening WS..."
       var ws = await server.handleRequest(req)
       if ws.readyState != Open:
         raise ValueError.newException("Failed to open websocket connection")
 
       var wsclient = newWSClient(rs, ws, user_id, ip)
-      vlog "[ws.relay] starting..."
+      wsclient.debugname = rs.debugname & "." & wsclient.debugname
+      vlog wsclient.logname, "starting..."
       try:
         relayconn = rs.relay.initAuth(wsclient, channel = $user_id)
         var decoder = newNetstringDecoder()
+        var msgfut: Future[seq[byte]]
+        var evfut: Future[RelayEvent]
         while ws.readyState != ReadyState.Closed:
-          let buff = try:
-              await ws.recvMsg()
-            except:
-              break
-          when multiusermode:
-            rs.log_user_data_sent(user_id, buff.len)
-            rs.log_ip_data_sent(ip, buff.len)
-          decoder.consume(string.fromBytes(buff))
-          while decoder.hasMessage():
-            let cmd = loadsRelayCommand(decoder.nextMessage())
-            vlog "[ws.relay] got cmd: " & $cmd.kind
-            rs.relay.handleCommand(relayconn, cmd)
+          if msgfut.isNil:
+            msgfut = ws.recvMsg()
+          if evfut.isNil:
+            evfut = wsclient.eventQueue.get()
+          await (msgfut or evfut)
+          if evfut.finished:
+            let ev = await evfut
+            evfut = nil
+            let msg = nsencode(dumps(ev))
+            when multiusermode:
+              rs.log_user_data_recv(wsclient.user_id, msg.len)
+              rs.log_ip_data_recv(wsclient.ip, msg.len)
+            await ws.send(msg.toBytes, Opcode.Binary)
+          if msgfut.finished:
+            let buff = try:
+                await msgfut
+              except:
+                vlog wsclient.logname, "error getting msg: ", getCurrentExceptionMsg()
+                break
+            msgfut = nil
+            when multiusermode:
+              rs.log_user_data_sent(user_id, buff.len)
+              rs.log_ip_data_sent(ip, buff.len)
+            decoder.consume(string.fromBytes(buff))
+            while decoder.hasMessage():
+              let cmd = loadsRelayCommand(decoder.nextMessage())
+              rs.relay.handleCommand(relayconn, cmd)
       finally:
-        wsclient.ws = nil
+        await wsclient.closeWait()
     except WSClosedError:
-      debug "relay/server: ws closed"
+      discard
     except WebSocketError as exc:
-      logging.error "relay/server: WebSocketError: " & exc.msg
+      error rs.logname, "WebSocketError: ", exc.msg
       await req.sendError(Http400)
     except Exception as exc:
-      logging.error "relay/server: connection failed: " & exc.msg
+      error rs.logname, "connection failed: ", exc.msg
       await req.sendError(Http400)
     finally:
       if not relayconn.isNil:
@@ -783,7 +808,7 @@ proc handleRequestAuthV1(rs: RelayServer, req: HttpRequest) {.async, multiuseron
           resp["error"] = newJString("Wrong password")
         except Exception as exc:
           vlog "[ws.auth] unexpected error"
-          logging.error exc.msg
+          error exc.msg
           resp["error"] = newJString("Unexpected error")
         finally:
           vlog "[ws.auth] sending response"
@@ -821,9 +846,13 @@ proc handleRequestV1(rs: RelayServer, req: HttpRequest, subpath: string) {.async
 # HTTP routing common to all versions
 #-------------------------------------------------------------
 
-proc handleRequest*(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
+proc handleRequest*(rs: RelayServer, req: HttpRequest): Future[void] {.async, gcsafe.} =
   ## Handle a relay server websocket request.
   {.gcsafe.}:
+    let reqid = rs.nextid
+    rs.nextid.inc()
+    rs.runningRequests[reqid] = req
+    defer: rs.runningRequests.del(reqid)
     when defined(testmode):
       allHttpRequests.add(req)
       defer:
@@ -871,7 +900,11 @@ proc start*(rs: RelayServer, address: TransportAddress, tlsPrivateKey = "", tlsC
     try:
       await rs.handleRequest(request)
     except:
-      logging.error "Error handling request: " & getCurrentExceptionMsg()
+      let msg = getCurrentExceptionMsg()
+      if "Stream is already closed" in msg:
+        discard
+      else:
+        logging.error rs.logname, "Error handling HTTP request: " & getCurrentExceptionMsg()
   rs.http.start()
 
 proc finish*(rs: RelayServer) {.async.} =
@@ -879,3 +912,4 @@ proc finish*(rs: RelayServer) {.async.} =
   rs.http.stop()
   rs.http.close()
   await rs.http.join()
+  vlog rs.logname, "finished"

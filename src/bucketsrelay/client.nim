@@ -2,18 +2,19 @@
 #
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
-
 import std/base64
 import std/logging
 import std/options
-import std/strformat
 import std/random
+import std/strformat
 
 import chronos; export chronos
-import chronicles; export chronicles
+import chronicles except debug, info, warn, error
+export activeChroniclesStream, Record, activeChroniclesScope
 import stew/byteutils
 import websock/websock
 
+import ./common
 import ./netstring
 import ./proto; export proto
 import ./stringproto
@@ -22,6 +23,9 @@ const HEARTBEAT_INTERVAL = 50.seconds
 const HEARTBEAT_JITTER = 1000
 
 type
+  ## RelayClient wraps a single websockets connection
+  ## to a relay server. It will call things on
+  ## `handler: T` to interact with your code.
   RelayClient*[T] = ref object
     keys: KeyPair
     wsopt: Option[WSSession]
@@ -30,6 +34,8 @@ type
     password: string
     verifyHostname: bool
     done*: Future[void]
+    tasks*: seq[Future[void]]
+    debugname*: string
   
   ClientLifeEventKind* = enum
     ConnectedToServer
@@ -52,7 +58,13 @@ proc newRelayClient*[T](keys: KeyPair, handler: T, username, password: string, v
   result.username = username
   result.password = password
   result.verifyHostname = verifyHostname
-  result.done = newFuture[void]("newRelayClient done")
+  # result.done = newFuture[void]("newRelayClient done")
+  result.debugname = "RelayClient" & nextDebugName()
+
+proc logname*(client: RelayClient): string =
+  "(" & client.debugname & ") "
+
+proc `$`*(client: RelayClient): string = client.debugname
 
 proc ws*(client: RelayClient): WSSession =
   if client.wsopt.isSome:
@@ -61,6 +73,7 @@ proc ws*(client: RelayClient): WSSession =
     raise RelayNotConnected.newException("Not connected")
 
 proc send(ws: WSSession, cmd: RelayCommand) {.async.} =
+  ## Send a RelayCommand to the server
   await ws.send(nsencode(dumps(cmd)).toBytes, Opcode.Binary)
 
 proc keepAliveLoop(client: RelayClient) {.async.} =
@@ -71,50 +84,54 @@ proc keepAliveLoop(client: RelayClient) {.async.} =
       await sleepAsync(HEARTBEAT_INTERVAL + rand(HEARTBEAT_JITTER).milliseconds)
       if client.wsopt.isSome:
         let ws = client.wsopt.get()
-        when defined(verbose):
-          logging.debug "Sending ping..."
         await ws.ping()
       else:
         break
+  except CancelledError:
+    discard
   except:
-    logging.error "unexpected error in ws keepAliveLoop: " & getCurrentExceptionMsg()
+    error client.logname, "unexpected error in ws keepAliveLoop"
 
 proc loop(client: RelayClient, authenticated: Future[void]): Future[void] {.async.} =
   var decoder = newNetstringDecoder()
   if client.wsopt.isSome():
     let ws = client.ws
     while ws.readyState != ReadyState.Closed:
-      let buff = try:
-          await ws.recvMsg()
-        except Exception as exc:
-          await client.handler.handleLifeEvent(ClientLifeEvent(
-            kind: DisconnectedFromServer,
-          ), client)
+      try:
+        let buff = try:
+            await ws.recvMsg()
+          except Exception as exc:
+            break
+        if buff.len <= 0:
           break
-      if buff.len <= 0:
+        let data = string.fromBytes(buff)
+        decoder.consume(data)
+        while decoder.hasMessage():
+          let ev = loadsRelayEvent(decoder.nextMessage())
+          case ev.kind
+          of Who:
+            await ws.send(RelayCommand(
+              kind: Iam,
+              iam_signature: sign(client.keys.sk, ev.who_challenge),
+              iam_pubkey: client.keys.pk,
+            ))
+          of Authenticated:
+            authenticated.complete()
+          else:
+            discard
+          try:
+            await client.handler.handleEvent(ev, client)
+          except:
+            debug client.logname, "Error handling event ", $ev, " ", getCurrentExceptionMsg()
+            raise
+      except CancelledError:
         break
-      let data = string.fromBytes(buff)
-      decoder.consume(data)
-      while decoder.hasMessage():
-        let ev = loadsRelayEvent(decoder.nextMessage())
-        case ev.kind
-        of Who:
-          await ws.send(RelayCommand(
-            kind: Iam,
-            iam_signature: sign(client.keys.sk, ev.who_challenge),
-            iam_pubkey: client.keys.pk,
-          ))
-        of Authenticated:
-          authenticated.complete()
-        else:
-          discard
-        await client.handler.handleEvent(ev, client)
+    debug client.logname, "closing..."
     client.wsopt = none[WSSession]()
     await ws.close()
     await client.handler.handleLifeEvent(ClientLifeEvent(
       kind: DisconnectedFromServer,
     ), client)
-
 
 proc authHeaderHook*(username, password: string): Hook =
   ## Create a websock connection hook that adds Basic HTTP authentication
@@ -190,7 +207,8 @@ proc connect*(client: RelayClient, url: string) {.async.} =
   ), client)
   var authenticated = newFuture[void]("relay.client.dial.authenticated")
   client.done = client.loop(authenticated)
-  asyncSpawn client.keepAliveLoop()
+  let fut = client.keepAliveLoop()
+  client.tasks.add(fut)
   await authenticated
 
 proc connect*(client: RelayClient, pubkey: PublicKey) {.async, raises: [RelayNotConnected].} =
@@ -210,9 +228,13 @@ proc sendData*(client: RelayClient, dest_pubkey: PublicKey, data: string) {.asyn
 
 proc disconnect*(client: RelayClient) {.async.} =
   ## Disconnect this client from the network
+  if not client.done.isNil:
+    await client.done.cancelAndWait()
   if client.wsopt.isSome:
     await client.wsopt.get().close()
     client.wsopt = none[WSSession]()
+  for task in client.tasks:
+    await task.cancelAndWait()
 
 proc disconnect*(client: RelayClient, dest_pubkey: PublicKey) {.async.} =
   ## Disconnect this client from a remote client

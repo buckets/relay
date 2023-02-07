@@ -169,7 +169,7 @@ proc `==`*(a, b: RelayCommand): bool =
     of SendData:
       return a.send_data == b.send_data and a.dest_pubkey == b.dest_pubkey
 
-proc dbg*(ev: RelayEvent): string =
+proc `$`*(ev: RelayEvent): string =
   result.add "("
   case ev.kind
   of Who:
@@ -190,7 +190,9 @@ proc dbg*(ev: RelayEvent): string =
     result.add "Error " & ev.err_message
   result.add ")"
 
-proc dbg*(cmd: RelayCommand): string =
+template dbg*(ev: RelayEvent): string = $ev
+
+proc `$`*(cmd: RelayCommand): string =
   result.add "("
   case cmd.kind
   of Iam:
@@ -202,6 +204,8 @@ proc dbg*(cmd: RelayCommand): string =
   of SendData:
     result.add &"SendData {cmd.dest_pubkey.abbr} data={cmd.send_data.len}"
   result.add ")"
+
+template dbg*(cmd: RelayCommand): string = $cmd
 
 when defined(testmode):
   # proc dump*(relay: Relay): string =
@@ -224,7 +228,7 @@ proc newRelayConnection*[T](sender: T): RelayConnection[T] =
 template sendEvent(conn: RelayConnection, ev: RelayEvent) =
   case ev.kind
   of Data:
-    when defined(verbose):
+    when relayverbose:
       debug $conn & "<  " & ev.dbg
     else:
       discard
