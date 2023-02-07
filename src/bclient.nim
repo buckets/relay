@@ -9,7 +9,7 @@ import std/strutils
 import std/base64
 import std/os
 
-import chronos
+import chronos except debug, info, warn, error
 
 import bucketsrelay/client
 import bucketsrelay/proto
@@ -26,13 +26,17 @@ proc newSendHandler(data: string): SendHandler =
   result.sent = newFuture[void]("newSendHandler")
 
 proc handleEvent(handler: SendHandler, ev: RelayEvent, remote: RelayClient) {.async.} =
-  case ev.kind
-  of Connected:
-    await remote.sendData(ev.conn_pubkey, handler.data)
-    handler.sent.complete()
-    await remote.disconnect()
-  else:
-    discard
+  try:
+    case ev.kind
+    of Connected:
+      await remote.sendData(ev.conn_pubkey, handler.data)
+      callSoon(proc(udata: pointer) =
+        handler.sent.complete())
+    else:
+      discard
+  except CancelledError:
+    warn "SendHandler cancelled during event handling"
+    raise
 
 proc handleLifeEvent(handler: SendHandler, ev: ClientLifeEvent, remote: RelayClient) {.async.} =
   discard
@@ -48,13 +52,17 @@ proc newRecvHandler(): RecvHandler =
   result.data = newFuture[string]("newRecvHandler")
 
 proc handleEvent(handler: RecvHandler, ev: RelayEvent, remote: RelayClient) {.async.} =
-  case ev.kind
-  of Data:
-    handler.buf.add(ev.data)
-  of Disconnected:
-    handler.data.complete(handler.buf)
-  else:
-    discard
+  try:
+    case ev.kind
+    of Data:
+      handler.buf.add(ev.data)
+    of Disconnected:
+      handler.data.complete(handler.buf)
+    else:
+      discard
+  except CancelledError:
+    warn "RecvHandler cancelled during event handling"
+    raise
 
 proc handleLifeEvent(handler: RecvHandler, ev: ClientLifeEvent, remote: RelayClient) {.async.} =
   discard

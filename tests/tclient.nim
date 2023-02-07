@@ -135,6 +135,30 @@ when multiusermode:
       expect RelayNotConnected:
         waitFor client1.sendData("foobar".PublicKey, "some data")
 
+  test "server goes down":
+    withinTmpDir:
+      var server = newRelayServer(":memory:")
+      server.start(initTAddress("127.0.0.1", 9002))
+      let user1 = server.verified_user("alice", "password")
+
+      var ch = newClientHandler()
+      var keys1 = genkeys()
+      var client1 = newRelayClient(keys1, ch, "alice", "password")
+      waitFor client1.connect("ws://127.0.0.1:9002/v1/relay")
+      discard waitFor ch.popEvent(ConnectedToServer)
+      echo "Stopping relay server ..."
+      waitFor server.finish()
+      echo "Relay server stopped"
+      for req in allHttpRequests:
+        # req.stream.writer.tsource.close()
+        req.stream.reader.tsource.close()
+      echo "Closed stream"
+      discard waitFor ch.popEvent(DisconnectedFromServer)
+      expect RelayNotConnected:
+        waitFor client1.connect("foobar".PublicKey)
+      expect RelayNotConnected:
+        waitFor client1.sendData("foobar".PublicKey, "some data")
+
   test "wrong credentials":
     var server = newRelayServer(":memory:")
     server.start(initTAddress("127.0.0.1", 9003))

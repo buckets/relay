@@ -1,6 +1,8 @@
-import std/logging
 import std/macros
 import std/strformat
+import std/random; export random
+
+import chronicles
 
 import libsodium/sodium
 import libsodium/sodium_sizes
@@ -8,6 +10,14 @@ import libsodium/sodium_sizes
 const
   singleusermode* = defined(relaysingleusermode)
   multiusermode* = not singleusermode
+  relayverbose* = defined(relayverbose)
+
+template nextDebugName*(): untyped =
+  $rand(100000..999999)
+
+template vlog*(x: varargs[string, `$`]): untyped =
+  when relayverbose:
+    debug x
 
 proc hash_password*(password: string): string =
   # We use a lower memlimit because a stolen password is
@@ -40,7 +50,7 @@ var lastMem = getOccupiedMem()
 proc checkmem*(name: string) =
   let newMem = getOccupiedMem()
   let diffMem = newMem - lastMem
-  logging.debug &"[memory] {diffMem:>10} = {newMem:>10} <- {lastMem:>10}  {name}"
+  debug "checkmem", res = &"{diffMem:>10} = {newMem:>10} <- {lastMem:>10}  {name}"
   lastMem = newMem
 
 template checkMemGrowth(name: string, body: untyped): untyped =
