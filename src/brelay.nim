@@ -50,6 +50,10 @@ proc startRelay*(dbfilename: string, port = 9001.Port, address = "127.0.0.1"): R
   result = getRelayServer(dbfilename)
   let taddress = initTAddress(address, port.int)
   info &"Starting Buckets Relay on {taddress} ..."
+  if result.pubkey == "":
+    info &"[config] License auth: DISABLED"
+  else:
+    info &"[config] License auth: on"
   stderr.flushFile
   result.start(taddress)
   result.periodically_delete_old_stats()

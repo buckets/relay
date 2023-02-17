@@ -58,7 +58,7 @@ type
     longrunservices: seq[Future[void]]
     runningRequests: TableRef[int, HttpRequest]
     when multiusermode:
-      pubkey: string
+      pubkey*: string
       dbfilename: string
       updateSchema: bool
       userdb: Option[DbConn]
@@ -645,6 +645,9 @@ proc authenticate(rs: RelayServer, req: HttpRequest): int64 =
   except WrongPassword:
     info rs.logname, "WrongPassword: " & getCurrentExceptionMsg()
     raise
+  except:
+    logging.error rs.logname, "Error during authentication: " & getCurrentExceptionMsg()
+    raise
 
 when defined(testmode):
   var allHttpRequests*: seq[HttpRequest]
@@ -658,6 +661,7 @@ proc handleRequestRelayV1(rs: RelayServer, req: HttpRequest) {.async, gcsafe.} =
         vlog "authenticating..."
         rs.authenticate(req)
       except:
+        logging.error "Error authenticating: " & getCurrentExceptionMsg()
         await req.sendError(Http403)
         return
     vlog rs.logname, "auth ok"

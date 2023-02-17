@@ -11,7 +11,7 @@
       background-color: rgba(52, 73, 94,1.0);
     }
     hr {
-      border: 1px solid rgba(52, 73, 94,1.0);
+      border: 1px solid rgba(52, 73, 94, 0.2);
       border-width: 1px 0 0 0;
       padding: 0;
       height: 1px;
@@ -23,8 +23,8 @@
     .card {
       background-color: white;
       margin: 2rem auto;
-      width: 40rem;
-      border-radius: 4px;
+      max-width: 40rem;
+      border-radius: 16px;
       padding: 2rem;
     }
     form {
@@ -43,9 +43,9 @@
       margin-top: 1rem;
     }
     .box {
-      border: 1px solid rgba(52, 73, 94,1.0);
+      border: 1px solid rgba(189, 195, 199,1.0);
       padding: 1rem;
-      border-radius: 4px;
+      border-radius: 16px;
       margin: 1rem auto;
       text-align: left;
     }
@@ -62,22 +62,57 @@
     .error {
       color: red;
     }
+    label {
+      margin-top: .75rem;
+    }
+    input {
+      font-size: 1rem;
+      min-width: 15rem;
+      max-width: 100%;
+      border-radius: 4px;
+      border: 1px solid rgba(189, 195, 199,1.0);
+      box-shadow: none;
+      margin-top: .25rem;
+    }
+    button {
+      cursor: pointer;
+      font-size: 1rem;
+      padding: .5rem 1rem;
+      background-color: rgba(41, 156, 237,1.0);
+      color: white;
+      border: none;
+      border-radius: 4px;
+      min-width: 10rem;
+    }
+    button:focus,
+    input:focus {
+      outline: 3px solid rgba(52, 73, 94,1.0);
+    }
+    button:hover {
+      background-color: rgba(41, 128, 185,1.0);
+    }
+    p {
+      line-height: 1.5rem;
+    }
     </style>
   </head>
   <body style="text-align: center;">
     <div class="card">
       <h1>
-        <img src="/static/favicon.png" style="vertical-align: middle;">
-        <span>Buckets Relay Server</span>
+        <img src="/static/logo.png" style="vertical-align: middle; width: 64px; height: 64px;">
+        <span>Buckets Relay</span>
       </h1>
 
       <p>
-        This relay server is for use with the <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a> budgeting app to allow you to share budget data among your devices.
-        Use of this server may be revoked at any time for any reason.
+        If you use <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a>, this relay lets you securely share your budget among your devices. This relay doesn't store any budget info. Instead, think of it like a satellite in the sky that can bounce your data from your computer to your phone.
       </p>
 
       <p>
-        This server is <a href="https://github.com/buckets/relay" target="_blank">Open Source</a> if you'd like to run your own instance.
+        Use of this service may be revoked at any time for any reason.
+      </p>
+
+      <p>
+        The code for this is <a href="https://github.com/buckets/relay" target="_blank">Open Source</a> if you'd like to run your own instance.
       </p>
 
       {{#openregistration}}
@@ -112,7 +147,7 @@
         <button type="submit" onclick="verifyEmail();">Verify</button>
         <div id="verify-status" class="status"></div>
         <hr/>
-        If you didn't receive a verification code, you can <button onclick="sendVerify();">email another code</button>
+        If you didn't receive a verification code, you can <button onclick="sendVerify();">email another code.</button>
         
       </div>
 
