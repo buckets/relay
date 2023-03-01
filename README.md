@@ -77,7 +77,7 @@ fly secrets set POSTMARK_API_KEY='your key' AUTH_LICENSE_PUBKEY='the key' LICENS
 
 ## Protocol
 
-Relay clients communicate with the relay server using the following protocol. See [./src/relay/proto.nim](./src/relay/proto.nim) for more information, and [./src/relay/stringproto.nim](./src/relay/stringproto.nim) for encoding details.
+Relay clients communicate with the relay server using the following protocol. See [./src/bucketsrelay/proto.nim](./src/bucketsrelay/proto.nim) for more information, and [./src/bucketsrelay/stringproto.nim](./src/bucketsrelay/stringproto.nim) for encoding details.
 
 In summary, devices connect with websockets and exchange messages. Messages sent from client to server are called commands. Messages sent from server to client are called events.
 
