@@ -30,7 +30,7 @@ proc valueRef(location: string): string =
   else:
     raise ValueError.newException("Unknown variable ref type")
 
-proc sendEmail*(toEmail, subject, text: string) {.async, raises:[CatchableError].} =
+proc sendEmail*(toEmail, subject, text: string) {.async: (raises: [CatchableError]).} =
   when usepostmark:
     let data = $(%* {
       "From": fromEmail,
@@ -45,7 +45,10 @@ proc sendEmail*(toEmail, subject, text: string) {.async, raises:[CatchableError]
     headers.add("X-Postmark-Server-Token", POSTMARK_API_KEY.valueRef)
     let (code, res) = await request("https://api.postmarkapp.com/email", MethodPost, data, headers = headers)
     if code != 200:
-      error "Error sending email: " & $res
+      try:
+        error "Error sending email: " & $res
+      except:
+        discard
       raise CatchableError.newException("Email sending failed")
   else:
     # logging only
