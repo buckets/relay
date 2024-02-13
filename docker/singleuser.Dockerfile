@@ -1,5 +1,5 @@
 # -- Stage 1 -- #
-FROM nimlang/nim:1.6.10-alpine@sha256:408ebac99ad2d170a59e7a09c10e82e7336cf71fa38c7a1322aaa598a54d32c2 as builder
+FROM nimlang/nim:1.6.18-alpine@sha256:e54f241d4cc4c7e677641a535df6f5cae2e6fa527cb36f53a4c7bd77214b1b80 as builder
 WORKDIR /app
 RUN apk update && apk add libsodium-static libsodium musl-dev
 RUN nimble refresh
