@@ -558,7 +558,7 @@ proc top_data_ips*(rs: RelayServer, limit = 20, days = 7): seq[tuple[ip: string,
   for row in rows:
     result.add((row[0].s, (row[1].i.int, row[2].i.int)))
 
-proc delete_old_stats*(rs: RelayServer, keep_days = 90) {.gcsafe, raises: [], multiuseronly.} =
+proc delete_old_stats*(rs: RelayServer, keep_days = 90) {.gcsafe, multiuseronly.} =
   ## Remote stats older than `keep_days` days
   try:
     info "Deleting stats older than " & $keep_days & "days"

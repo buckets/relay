@@ -30,7 +30,7 @@ proc valueRef(location: string): string =
   else:
     raise ValueError.newException("Unknown variable ref type")
 
-proc sendEmail*(toEmail, subject, text: string) {.async: (raises: [CatchableError]).} =
+proc sendEmail*(toEmail, subject, text: string) {.async.} =
   when usepostmark:
     let data = $(%* {
       "From": fromEmail,
