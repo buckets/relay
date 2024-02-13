@@ -11,7 +11,7 @@ jobs:
     strategy:
       matrix:
         version:
-          - binary:stable
+          - binary:1.6.18
         os:
           - ubuntu-latest
           # - macOS-latest
