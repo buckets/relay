@@ -11,20 +11,27 @@ This repository contains the open source code for the [Buckets](https://www.budg
 If you want to run the relay on your own computer with only one user account, do the following:
 
 1. Install [Nim](https://nim-lang.org/)
-2. Run `nimble -d:relaysingleusermode install https://github.com/buckets/relay.git`
+2. Build the relay:
+
+```
+git clone https://github.com/buckets/relay.git buckets-relay.git
+cd buckets-relay.git
+nimble singleuserbins
+```
+
 3. Run the server:
 
 ```sh
 RELAY_USERNAME=someusername
 RELAY_PASSWORD=somepassword
-brelay server
+bin/brelay server
 ```
 
 This will launch the relay on the default port. Run `brelay --help` for more options.
 
 ## Multi-user mode
 
-If you install/compile without `-d:relaysingleusermode` the server will run in multi-user mode.
+If instead of `nimble singleuserbins` you run `nimble multiuserbins` the server will be built in multi-user mode.
 
 Register users via `brelay adduser ...` or through the web interface.
 
