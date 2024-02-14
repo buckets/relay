@@ -27,18 +27,25 @@ jobs:
     #----------------------------------------
     - name: Install
       run: nimble install -y
+    - name: Build bins
+      run: nimble multiuserbins
     - name: Run tests
-      run: nimble test
+      run: |
+        export PATH="${PATH}:$(pwd)/bin"
+        nimble test
     - name: Command-line tests
       run: |
+        export PATH="${PATH}:$(pwd)/bin"
         tests/func1.sh
     #----------------------------------------
     # single user mode
     #----------------------------------------
     - name: Install (single user mode)
-      run: nimble -d:relaysingleusermode install -y
+      run: nimble singleuserbins
     - name: Run tests (single user mode)
-      run: nimble -d:relaysingleusermode test
+      run: |
+        export PATH="${PATH}:$(pwd)/bin"
+        nimble -d:relaysingleusermode test
 
   docker:
     runs-on: ubuntu-latest
