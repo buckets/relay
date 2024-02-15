@@ -27,14 +27,6 @@ jobs:
     #----------------------------------------
     - name: Install
       run: nimble install -y
-    - name: Environment
-      run: |
-        which nimble
-        nimble path chronos || echo no
-        nimble path nimble || echo no
-        cat /home/runner/work/relay/relay/nimdir/config/nim.cfg || echo no
-        cat /home/runner/work/relay/relay/nimdir/config/config.nims || echo no
-        cat /home/runner/work/relay/relay/config.nims || echo no
     - name: Build bins
       run: nimble multiuserbins
     - name: Run tests

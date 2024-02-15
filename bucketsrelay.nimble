@@ -30,10 +30,10 @@ import std/os
 
 task singleuserbins, "Build single user brelay and bclient bins":
   exec("mkdir -p bin")
-  exec("nim c -d:relaysingleusermode -o:bin/brelay src/brelay.nim")
-  exec("nim c -d:relaysingleusermode -o:bin/bclient src/bclient.nim")
+  exec("nimble c -d:relaysingleusermode -o:bin/brelay src/brelay.nim")
+  exec("nimble c -d:relaysingleusermode -o:bin/bclient src/bclient.nim")
 
 task multiuserbins, "Build multi user brelay and bclient bins":
   exec("mkdir -p bin")
-  exec("nim c -o:bin/brelay src/brelay.nim")
-  exec("nim c -o:bin/bclient src/bclient.nim")
+  exec("nimble c -o:bin/brelay src/brelay.nim")
+  exec("nimble c -o:bin/bclient src/bclient.nim")
