@@ -22,6 +22,8 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         version: ${{ matrix.version }}
+    - name: Update nimble
+      run: nimble install -y nimble
     #----------------------------------------
     # multi user mode (default)
     #----------------------------------------
