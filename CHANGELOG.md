@@ -1,3 +1,8 @@
+# v0.3.0 - 2024-02-14
+
+- **NEW:** When installing the package, the binaries are no longer built automatically
+- **FIX:** Pin dependency versions
+
 # v0.2.0 - 2023-02-07
 
 - **NEW:** Add docker build testing to CI
