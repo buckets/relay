@@ -1,3 +1,7 @@
+# v0.3.1 - 2024-03-04
+
+- **FIX:** Internal type-checking fix
+
 # v0.3.0 - 2024-02-14
 
 - **NEW:** When installing the package, the binaries are no longer built automatically
