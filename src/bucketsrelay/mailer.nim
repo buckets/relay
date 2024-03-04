@@ -52,5 +52,5 @@ proc sendEmail*(toEmail, subject, text: string) {.async, raises: [CatchableError
       raise CatchableError.newException("Email sending failed")
   else:
     # logging only
-    info &"EMAIL FAKE SENDER:\nFrom: {fromEmail}\nTo: {toEmail}\nSubject: {subject}\n\n{text}\n------------------------------------"
+    info "EMAIL FAKE SENDER:\nFrom: " & fromEmail & "\nTo: " & toEmail & "\nSubject: " & subject & "\n\n" & text & "\n------------------------------------"
     stderr.flushFile()
