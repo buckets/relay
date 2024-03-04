@@ -30,7 +30,7 @@ proc valueRef(location: string): string =
   else:
     raise ValueError.newException("Unknown variable ref type")
 
-proc sendEmail*(toEmail, subject, text: string) {.async.} =
+proc sendEmail*(toEmail, subject, text: string) {.async, raises: [CatchableError].} =
   when usepostmark:
     let data = $(%* {
       "From": fromEmail,
@@ -52,5 +52,5 @@ proc sendEmail*(toEmail, subject, text: string) {.async.} =
       raise CatchableError.newException("Email sending failed")
   else:
     # logging only
-    info &"EMAIL FAKE SENDER:\nFrom: {fromEmail}\nTo: {toEmail}\nSubject: {subject}\n\n{text}\n------------------------------------"
+    info "EMAIL FAKE SENDER:\nFrom: " & fromEmail & "\nTo: " & toEmail & "\nSubject: " & subject & "\n\n" & text & "\n------------------------------------"
     stderr.flushFile()
