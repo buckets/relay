@@ -6,16 +6,26 @@
 
 This repository contains the open source code for the [Buckets](https://www.budgetwithbuckets.com) relay server, which allows users to share budget data between their devices in an end-to-end encrypted way.
 
+You can use the publicly available relay at <https://relay.budgetwithbuckets.com>
+
 ## Quickstart - single user mode
 
 If you want to run the relay on your own computer with only one user account, do the following:
 
 1. Install [Nim](https://nim-lang.org/)
-2. Build the relay:
+2. Get the code:
 
 ```
 git clone https://github.com/buckets/relay.git buckets-relay.git
 cd buckets-relay.git
+```
+
+3. Install dependencies
+
+```
+nimble install https://github.com/iffy/pkger/
+```
+
 nimble singleuserbins
 ```
 
@@ -36,8 +46,6 @@ If instead of `nimble singleuserbins` you run `nimble multiuserbins` the server 
 Register users via `brelay adduser ...` or through the web interface.
 
 Registration-related emails are sent through [Postmark](https://postmarkapp.com/). Set `POSTMARK_API_KEY` to your Postmark key to use it. Otherwise, disable emails with `-d:nopostmark`.
-
-Users can authenticate with their Buckets license if you set an environment variable `AUTH_LICENSE_PUBKEY=<A PEM FORMATTED PUBKEY>`
 
 ## Security
 
@@ -73,14 +81,12 @@ fly secrets set RELAY_USERNAME='someusername' RELAY_PASSWORD='somepassword'
 
 ```sh
 fly launch --dockerfile docker/multiuser.Dockerfile
-fly secrets set POSTMARK_API_KEY='your key' AUTH_LICENSE_PUBKEY='the key' LICENSE_HASH_SALT='choose something here'
+fly secrets set POSTMARK_API_KEY='your key'
 ```
 
 | Variable | Description |
 |---|---|
 | `POSTMARK_API_KEY` | API key from [Postmark](https://postmarkapp.com/) |
-| `AUTH_LICENSE_PUBKEY` | RSA public key of Buckets licenses. If empty, license authentication is disabled. |
-| `LICENSE_HASH_SALT` | A hashing salt for the case when a license needs to be disabled. Any random, but consistent value is fine. |
 
 ## Protocol
 
@@ -90,12 +96,7 @@ In summary, devices connect with websockets and exchange messages. Messages sent
 
 ### Authentication
 
-Clients authenticate with the server in two ways:
-
-1. With a relay account via HTTP Basic authentication. This is used to group together a user's various clients and prevent abuse.
-2. With a public/private key. This is used to identify and connect individual clients.
-
-A single relay account can have multiple public/private keys; typically one for each device.
+Clients authenticate with the server with a public/private key. A single person may have multiple public/private keys; typically one for each device.
 
 ### Client Commands
 
@@ -103,7 +104,7 @@ Clients send the following commands:
 
 | Command      | Description |
 |--------------|-------------|
-| `Iam`        | In response to a `Who` event, proves that this client has the private key for their public key. |
+| `Iam`        | In response to a `Who` event, proves that this client has the private key |
 | `Connect`    | Asks the server for a connection to another client identified by the client's public key. |
 | `Disconnect` | Asks the server to disconnect a connection to another client. |
 | `SendData`   | Sends bytes to another client. |
@@ -130,7 +131,7 @@ The relay server sends the following events:
 Authentication happens like this:
 
 1. On connection, server sends `Who(challenge=ABCD...)`
-2. Client responds with `Iam(pubkey=MYPK..., signature=SIGN...)`
+2. Client responds with `Iam(username=USER..., password=PASS..., pubkey=MYPK..., signature=SIGN...)`
 3. If the signature is correct, server sends `Authenticated`
 
 ```
