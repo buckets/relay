@@ -3,7 +3,9 @@
 # This work is licensed under the terms of the MIT license.  
 # For a copy, see LICENSE.md in this repository.
 
-## These are the objects used for the protocol
+## These are the objects used for the protocol.
+## This file should be kept free of dependencies other than the stdlib
+## as it's meant to be referenced by outside libraries.
 
 import std/strformat
 import std/base64
@@ -26,6 +28,7 @@ type
 
   ErrorCode* = enum
     Generic = 0
+    TooLarge = 1
 
   RelayMessage* = object
     case kind*: MessageKind
@@ -36,7 +39,9 @@ type
     of Error:
       err_code*: ErrorCode
       err_message*: string
+      err_cmd*: CommandKind
     of Note:
+      note_topic*: string
       note_data*: string
 
   RelayCommand* = object
@@ -49,6 +54,11 @@ type
       pub_data*: string
     of FetchNote:
       fetch_topic*: string
+
+const
+  MAX_TOPIC_SIZE* = 512
+  MAX_NOTE_SIZE* = 8096
+  RELAY_NOTE_DURATION* = 5 * 24 * 60 * 60
 
 template b64encode(x: string): string = base64.encode(x)
 
@@ -72,7 +82,7 @@ proc `$`*(msg: RelayMessage): string =
   of Okay:
     result.add &"cmd={msg.ok_cmd}"
   of Error:
-    result.add &"code={msg.err_code} msg={msg.err_message}"
+    result.add &"cmd={msg.err_cmd} code={msg.err_code} msg={msg.err_message}"
   of Note:
     result.add msg.note_data
   result.add ")"
