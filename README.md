@@ -152,7 +152,7 @@ Alice                 Relay                 Bob
 
 #### Data
 
-After authenticating, clients may send data to be stored and forwarded to clients next time they connect. Stored data expires after a time. In other words, the transport is unreliable by design.
+After authenticating, clients may send data to be stored and forwarded to clients next time they connect. Stored data expires after a time. Messages sent to unknown public keys will be dropped without notice. In other words, the transport is unreliable by design.
 
 Here's how it works:
 

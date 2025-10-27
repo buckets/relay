@@ -20,11 +20,7 @@ type
     Okay
     Error
     Note
-  
-  CommandKind* = enum
-    Iam
-    PublishNote
-    FetchNote
+    Data
 
   ErrorCode* = enum
     Generic = 0
@@ -43,6 +39,15 @@ type
     of Note:
       note_topic*: string
       note_data*: string
+    of Data:
+      data_src*: PublicKey
+      data_val*: string
+
+  CommandKind* = enum
+    Iam
+    PublishNote
+    FetchNote
+    SendData
 
   RelayCommand* = object
     case kind*: CommandKind
@@ -54,11 +59,17 @@ type
       pub_data*: string
     of FetchNote:
       fetch_topic*: string
+    of SendData:
+      dst*: PublicKey
+      data*: string
 
 const
-  MAX_TOPIC_SIZE* = 512
-  MAX_NOTE_SIZE* = 8096
+  RELAY_MAX_TOPIC_SIZE* = 512
+  RELAY_MAX_NOTE_SIZE* = 4096
   RELAY_NOTE_DURATION* = 5 * 24 * 60 * 60
+  RELAY_MAX_MESSAGE_SIZE* = 100_000
+  RELAY_MESSAGE_DURATION* = 30 * 24 * 60 * 60
+  RELAY_PUBKEY_MEMORY_SECONDS* = 60 * 24 * 60 * 60
 
 template b64encode(x: string): string = base64.encode(x)
 
@@ -84,7 +95,9 @@ proc `$`*(msg: RelayMessage): string =
   of Error:
     result.add &"cmd={msg.err_cmd} code={msg.err_code} msg={msg.err_message}"
   of Note:
-    result.add msg.note_data
+    result.add &"{msg.note_data.b64encode.abbr} ({msg.note_data.len})"
+  of Data:
+    result.add &"src={msg.data_src.abbr} data={msg.data_val.b64encode.abbr} ({msg.data_val.len})"
   result.add ")"
 
 proc `$`*(cmd: RelayCommand): string =
@@ -96,4 +109,6 @@ proc `$`*(cmd: RelayCommand): string =
     result.add &"'{cmd.pub_topic}' data={cmd.pub_data.b64encode}"
   of FetchNote:
     result.add &"'{cmd.fetch_topic}'"
+  of SendData:
+    result.add &"dst={cmd.dst.abbr} data={cmd.data.b64encode.abbr} ({cmd.data.len})"
   result.add ")"

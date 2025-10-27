@@ -173,7 +173,7 @@ suite "PublishNote":
     var alice = relay.authenticatedConn()
     relay.handleCommand(alice, RelayCommand(
       kind: PublishNote,
-      pub_topic: "h".repeat(MAX_TOPIC_SIZE + 1),
+      pub_topic: "h".repeat(RELAY_MAX_TOPIC_SIZE + 1),
       pub_data: "foo",
     ))
     block:
@@ -183,7 +183,7 @@ suite "PublishNote":
 
     relay.handleCommand(alice, RelayCommand(
       kind: FetchNote,
-      fetch_topic: "a".repeat(MAX_TOPIC_SIZE + 1),
+      fetch_topic: "a".repeat(RELAY_MAX_TOPIC_SIZE + 1),
     ))
     block:
       let err = alice.pop(Error)
@@ -196,7 +196,7 @@ suite "PublishNote":
     relay.handleCommand(alice, RelayCommand(
       kind: PublishNote,
       pub_topic: "topic",
-      pub_data: "a".repeat(MAX_NOTE_SIZE + 1),
+      pub_data: "a".repeat(RELAY_MAX_NOTE_SIZE + 1),
     ))
     let err = alice.pop(Error)
     check err.err_code == TooLarge
@@ -270,3 +270,121 @@ suite "PublishNote":
     ))
     let data = bob2.pop(Note)
     check data.note_data == "bar"
+    check data.note_topic == "foo"
+  
+  test "topic null byte":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "a\x00b",
+      pub_data: "c\x00d",
+    ))
+    let ok = alice.pop(Okay)
+    check ok.ok_cmd == PublishNote
+
+    relay.handleCommand(bob, RelayCommand(
+      kind: FetchNote,
+      fetch_topic: "a\x00b",
+    ))
+    let data = bob.pop(Note)
+    check data.note_data == "c\x00d"
+    check data.note_topic == "a\x00b"
+
+suite "data":
+
+  test "basic":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: bob.pk,
+      data: "hel\x00lo",
+    ))
+
+    let data = bob.pop(Data)
+    check data.data_src == alice.pk
+    check data.data_val == "hel\x00lo"
+
+  test "store and forward":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob1 = relay.authenticatedConn()
+    relay.disconnect(bob1)
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: bob1.pk,
+      data: "hel\x00lo",
+    ))
+
+    var bob2 = relay.authenticatedConn(bob1.keys)
+    let data = bob2.pop(Data)
+    check data.data_src == alice.pk
+    check data.data_val == "hel\x00lo"
+
+  test "max data size":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: alice.pk,
+      data: "a".repeat(RELAY_MAX_MESSAGE_SIZE + 1),
+    ))
+    let err = alice.pop(Error)
+    check err.err_code == TooLarge
+    check err.err_cmd == SendData
+
+  test "drop unknown key":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    let bobkeys = genkeys()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: bobkeys.pk,
+      data: "a",
+    ))
+    check alice.msgCount == 0
+
+    var bob = relay.authenticatedConn(bobkeys)
+    check bob.msgCount == 0 # "Should not have stored the message"
+  
+  test "drop forgotten key":
+    let relay = testRelay()
+    var bob = relay.authenticatedConn()
+    relay.disconnect(bob)
+
+    skewTime(RELAY_PUBKEY_MEMORY_SECONDS + 1)
+    var alice = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: bob.pk,
+      data: "a",
+    ))
+    check alice.msgCount == 0
+
+    var bob2 = relay.authenticatedConn(bob.keys)
+    check bob2.msgCount == 0 # "Should not have stored the message"
+
+  test "expiration":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    relay.disconnect(bob)
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: bob.pk,
+      data: "hello",
+    ))
+
+    skewTime(RELAY_MESSAGE_DURATION + 1)
+    var bob2 = relay.authenticatedConn(bob.keys)
+    check bob2.msgCount == 0

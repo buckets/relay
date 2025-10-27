@@ -99,6 +99,21 @@ proc updateSchema*(db: DbConn) =
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       data BLOB DEFAULT ''
     )""")
+    db.exec(sql"CREATE INDEX note_created ON note(created)")
+    db.exec(sql"""CREATE TABLE message (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      src TEXT NOT NULL,
+      dst TEXT NOT NULL,
+      data BLOB NOT NULL
+    )""")
+    db.exec(sql"CREATE INDEX message_created ON message(created)")
+    db.exec(sql"CREATE INDEX message_dst ON message(dst)")
+    db.exec(sql"""CREATE TABLE known_pubkey (
+      pubkey TEXT PRIMARY KEY,
+      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )""")
+    db.exec(sql"CREATE INDEX known_pubkey_last_seen ON known_pubkey(last_seen)")
   
   #----------- in-memory stuff
   db.exec(sql"""CREATE TEMPORARY TABLE note_sub (
@@ -180,7 +195,7 @@ proc delExpiredNotes(relay: Relay) =
 proc addNoteSub(relay: Relay, topic: string, pubkey: PublicKey) =
   ## Record that a pubkey is subscribed to a topic
   try:
-    relay.db.exec(sql"INSERT INTO note_sub (topic, pubkey) VALUES (?,?)", topic, pubkey.toDB)
+    relay.db.exec(sql"INSERT INTO note_sub (topic, pubkey) VALUES (?,?)", topic.DbBlob, pubkey.toDB)
     info &"[{pubkey.abbr}] sub {topic}"
   except:
     raise ValueError.newException("Topic already subscribed")
@@ -188,7 +203,7 @@ proc addNoteSub(relay: Relay, topic: string, pubkey: PublicKey) =
 proc getNoteSub(relay: Relay, topic: string): Option[PublicKey] =
   ## Return a PublicKey who is listening for a note by topic.
   relay.delExpiredNotes()
-  let orow = relay.db.getRow(sql"SELECT pubkey FROM note_sub WHERE topic = ?", topic)
+  let orow = relay.db.getRow(sql"SELECT pubkey FROM note_sub WHERE topic = ?", topic.DbBlob)
   if orow.isSome:
     return some(PublicKey.fromDB(orow.get()[0].s))
 
@@ -197,12 +212,12 @@ proc popNote(relay: Relay, topic: string): Option[string] =
   relay.delExpiredNotes()
   db.exec(sql"BEGIN")
   try:
-    let orow = db.getRow(sql"SELECT data FROM note WHERE topic=?", topic)
+    let orow = db.getRow(sql"SELECT data FROM note WHERE topic=?", topic.DbBlob)
     if orow.isSome:
       let row = orow.get()
-      result = some(row[0].strval)
+      result = some(row[0].b.string)
       info &"[note] pop {topic}"
-      db.exec(sql"DELETE FROM note WHERE topic=?", topic)
+      db.exec(sql"DELETE FROM note WHERE topic=?", topic.DbBlob)
     else:
       debug &"[note] dne {topic}"
     db.exec(sql"COMMIT")
@@ -211,8 +226,58 @@ proc popNote(relay: Relay, topic: string): Option[string] =
     db.exec(sql"ROLLBACK")
 
 proc delNoteSub(relay: Relay, topic: string) =
-  relay.db.exec(sql"DELETE FROM note_sub WHERE topic = ?", topic)
+  relay.db.exec(sql"DELETE FROM note_sub WHERE topic = ?", topic.DbBlob)
   info &"[note] del {topic}"
+
+
+#-------------------------------------------------------------------
+# send/receive data
+#-------------------------------------------------------------------
+
+proc forgetOldPubkeys(relay: Relay) =
+  let offset = when TESTMODE:
+      -RELAY_PUBKEY_MEMORY_SECONDS + TIME_SKEW
+    else:
+      -RELAY_PUBKEY_MEMORY_SECONDS
+  let offstring = &"{offset} seconds"
+  relay.db.exec(sql"DELETE FROM known_pubkey WHERE last_seen <= datetime('now', ?)", offstring)
+
+proc rememberPubkey(relay: Relay, pubkey: PublicKey) =
+  relay.db.exec(sql"""
+    INSERT OR REPLACE INTO known_pubkey (pubkey, last_seen)
+    VALUES (?, CURRENT_TIMESTAMP)""", pubkey.toDB)
+
+proc isKnown(relay: Relay, pubkey: PublicKey): bool =
+  relay.forgetOldPubkeys()
+  let orow = relay.db.getRow(sql"SELECT last_seen FROM known_pubkey WHERE pubkey = ?", pubkey.toDB)
+  return orow.isSome()
+
+proc delExpiredMessages(relay: Relay) =
+  let offset = when TESTMODE:
+      -RELAY_MESSAGE_DURATION + TIME_SKEW
+    else:
+      -RELAY_MESSAGE_DURATION
+  let offstring = &"{offset} seconds"
+  relay.db.exec(sql"DELETE FROM message WHERE created <= datetime('now', ?)", offstring)
+
+proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
+  let orow = relay.db.getRow(sql"""
+    SELECT id, src, data
+    FROM message
+    WHERE
+      dst = ?
+    ORDER BY
+      created ASC,
+      id ASC
+    LIMIT 1""", dst.toDB)
+  if orow.isSome:
+    let row = orow.get()
+    result = some(RelayMessage(
+      kind: Data,
+      data_src: PublicKey.fromDB(row[1].s),
+      data_val: row[2].b.string,
+    ))
+    relay.db.exec(sql"DELETE FROM message WHERE id=?", row[0].i)
 
 #-------------------------------------------------------------------
 # relay command handling
@@ -228,15 +293,26 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     except:
       conn.sendError("Invalid signature", cmd.kind, Generic)
       return
+    # successful connection
     conn.pubkey = cmd.iam_pubkey
     relay.clients[conn.pubkey] = conn
     conn.challenge = "" # disable authentication
+    relay.rememberPubkey(conn.pubkey)
     info &"[{conn.pubkey}] connected"
     conn.sendOkay cmd.kind
+
+    # send all queued messages
+    relay.delExpiredMessages()
+    while true:
+      let nexto = relay.nextMessage(conn.pubkey)
+      if nexto.isSome:
+        conn.sendMessage(nexto.get())
+      else:
+        break
   of PublishNote:
-    if cmd.pub_topic.len > MAX_TOPIC_SIZE:
+    if cmd.pub_topic.len > RELAY_MAX_TOPIC_SIZE:
       conn.sendError("Topic too long", cmd.kind, TooLarge)
-    elif cmd.pub_data.len > MAX_NOTE_SIZE:
+    elif cmd.pub_data.len > RELAY_MAX_NOTE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
     else:
       let opubkey = relay.getNoteSub(cmd.pub_topic)
@@ -247,18 +323,19 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         other_conn.sendMessage(RelayMessage(
           kind: Note,
           note_data: cmd.pub_data,
+          note_topic: cmd.pub_topic,
         ))
         relay.delNoteSub(cmd.pub_topic)
       else:
         # no one is waiting
         relay.db.exec(sql"INSERT INTO note (topic, data) VALUES (?, ?)",
-          cmd.pub_topic,
-          cmd.pub_data,
+          cmd.pub_topic.DbBlob,
+          cmd.pub_data.DbBlob,
         )
         conn.sendOkay cmd.kind
   of FetchNote:
-    if cmd.fetch_topic.len > MAX_TOPIC_SIZE:
-      conn.sendError("Topic too large", cmd.kind, TooLarge)
+    if cmd.fetch_topic.len > RELAY_MAX_TOPIC_SIZE:
+      conn.sendError("Topic too long", cmd.kind, TooLarge)
     else:
       let odata = relay.popNote(cmd.fetch_topic)
       if odata.isSome():
@@ -266,11 +343,31 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         conn.sendMessage(RelayMessage(
           kind: Note,
           note_data: odata.get(),
+          note_topic: cmd.fetch_topic,
         ))
       else:
         # the note isn't here yet
         relay.addNoteSub(cmd.fetch_topic, conn.pubkey)
-
+  of SendData:
+    if cmd.data.len > RELAY_MAX_MESSAGE_SIZE:
+      conn.sendError("Data too long", cmd.kind, TooLarge)
+    else:
+      if relay.clients.hasKey(cmd.dst):
+        # someone is waiting
+        var other_conn = relay.clients[cmd.dst]
+        other_conn.sendMessage(RelayMessage(
+          kind: Data,
+          data_src: conn.pubkey,
+          data_val: cmd.data,
+        ))
+      else:
+        # no one is waiting
+        if relay.isKnown(cmd.dst):
+          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?,?,?)",
+            conn.pubkey.toDB, cmd.dst.toDB, cmd.data.DbBlob,
+          )
+        else:
+          discard "silently drop the message"
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------
