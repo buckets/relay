@@ -107,46 +107,11 @@ proc updateSchema*(db: DbConn) =
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       src TEXT NOT NULL,
+      dst TEXT NOT NULL,
       data BLOB NOT NULL
     )""")
     db.exec(sql"CREATE INDEX message_created ON message(created)")
-    
-    # message_route
-    db.exec(sql"""CREATE TABLE message_route (
-      id INTEGER PRIMARY KEY,
-      message_id INTEGER REFERENCES message(id) ON DELETE CASCADE,
-      dst TEXT NOT NULL
-    )""")
-    db.exec(sql"CREATE INDEX message_route_dst ON message_route(dst)")
-    
-    # message_dst
-    db.exec(sql"""CREATE VIEW message_dst AS
-    SELECT
-      m.id,
-      m.created,
-      m.src,
-      r.dst,
-      m.data,
-      r.id AS route_id
-    FROM
-      message_route AS r
-      JOIN message AS m
-        ON m.id = r.message_id
-    """)
-
-    # auto-delete message orphans
-    db.exec(sql"""
-      CREATE TRIGGER IF NOT EXISTS delete_orphaned_message
-      AFTER DELETE ON message_route
-      FOR EACH ROW
-      BEGIN
-          DELETE FROM message
-          WHERE id = OLD.message_id
-            AND NOT EXISTS (
-                SELECT 1 FROM message_route WHERE message_id = OLD.message_id
-            );
-      END;
-    """)
+    db.exec(sql"CREATE INDEX message_dst ON message(dst)")
     
     # known_pubkey
     db.exec(sql"""CREATE TABLE known_pubkey (
@@ -304,8 +269,8 @@ proc delExpiredMessages(relay: Relay) =
 
 proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
   let orow = relay.db.getRow(sql"""
-    SELECT src, data, route_id
-    FROM message_dst
+    SELECT src, data, id
+    FROM message
     WHERE
       dst = ?
     ORDER BY
@@ -319,7 +284,7 @@ proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
       data_src: PublicKey.fromDB(row[0].s),
       data_val: row[1].b.string,
     ))
-    relay.db.exec(sql"DELETE FROM message_route WHERE id=?", row[2].i)
+    relay.db.exec(sql"DELETE FROM message WHERE id=?", row[2].i)
 
 #-------------------------------------------------------------------
 # relay command handling
@@ -391,31 +356,24 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         # the note isn't here yet
         relay.addNoteSub(cmd.fetch_topic, conn.pubkey)
   of SendData:
-    if cmd.data.len > RELAY_MAX_MESSAGE_SIZE:
+    if cmd.send_val.len > RELAY_MAX_MESSAGE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
     else:
-      var message_id: Option[int64]
-      for dst in cmd.dst:
-        if relay.clients.hasKey(dst):
-          # dst is online
-          var other_conn = relay.clients[dst]
-          other_conn.sendMessage(RelayMessage(
-            kind: Data,
-            data_src: conn.pubkey,
-            data_val: cmd.data,
-          ))
+      if relay.clients.hasKey(cmd.send_dst):
+        # dst is online
+        var other_conn = relay.clients[cmd.send_dst]
+        other_conn.sendMessage(RelayMessage(
+          kind: Data,
+          data_src: conn.pubkey,
+          data_val: cmd.send_val,
+        ))
+      else:
+        # dst is offline
+        if relay.isKnown(cmd.send_dst):
+          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
+              conn.pubkey.toDB, cmd.send_dst.toDB, cmd.send_val.DbBlob)
         else:
-          # dst is offline
-          if relay.isKnown(dst):
-            if message_id.isNone:
-              # first one of the recipients that's offline
-              let rowid = relay.db.insertID(sql"INSERT INTO message (src, data) VALUES (?, ?)",
-                conn.pubkey.toDB, cmd.data.DbBlob)
-              message_id = some(rowid)
-            relay.db.exec(sql"INSERT INTO message_route (message_id, dst) VALUES (?, ?)",
-              message_id.get(), dst.toDB)
-          else:
-            discard "silently drop the message"
+          discard "silently drop the message"
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------

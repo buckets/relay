@@ -90,14 +90,14 @@ Clients send the following commands:
 | `Iam`          | In response to a `Who` event, proves that this client has the private key |
 | `PublishNote`  | Send a few bytes to another client addressed by topic (good for key exchange) |
 | `FetchNote`    | Request a note addressed by topic |
-| `SendData`     | Store/forward bytes to another client, addressed by relay-authenticated public key |
+| `SendData`     | Store/forward bytes to other clients, addressed by relay-authenticated public keys |
 
 ### Server Events
 
 The relay server sends the following events:
 
-| Event           | Description |
-|-----------------|-------------|
+| Event           | Description                        |
+|-----------------|------------------------------------|
 | `Okay`          | Sent when certain commands succeed |
 | `Error`         | Sent when commands fail |
 | `Who`           | Challenge for authenticating a client's public/private keys |
@@ -156,7 +156,7 @@ After authenticating, clients may send data to be stored and forwarded to client
 
 Here's how it works:
 
-1. Alice sends `SendData(dst=BOBPK, data=hello)`
+1. Alice sends `SendData(dst=[BOBPK], data=hello)`
 2. Server sends to Bob `Data(src=ALICEPK, data=hello)`
 
 ```
@@ -164,9 +164,10 @@ Alice             Relay              Bob
   │                 │                 │
   ├───Authenticated─┼─Authenticated───┤
   │                 │                 │
-  │SendData(Bob)    │                 │
+  │ SendData(Bob)   │                 │
   ├────────────────►│ Data(Alice)     │
   │                 ├────────────────►│
   │                 │                 │
 ```
 
+Note that when multiple recipients are specified in a `SendData` command, all recipients will receive one copy of the message (assuming the message doesn't expire or get discarded instead).
