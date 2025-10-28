@@ -21,6 +21,10 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         version: ${{ matrix.version }}
+    - name: Install libsodium
+      run: |
+        sudo apt update -q
+        sudo apt install -y libsodium-dev
     - name: Install pkger
       run: nimble install -y https://github.com/iffy/pkger/
     - name: Install deps
