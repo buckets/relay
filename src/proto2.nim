@@ -70,7 +70,7 @@ template patch(db: untyped, applied: seq[string], name: string, body: untyped): 
         body
         db.exec(sql"INSERT INTO _schema_patches (name) VALUES (?)", name)
         db.exec(sql"COMMIT")
-      except:
+      except CatchableError:
         error name, " - error applying patch: " & getCurrentExceptionMsg()
         db.exec(sql"ROLLBACK")
         raise
@@ -129,13 +129,6 @@ proc updateSchema*(db: DbConn) =
       PRIMARY KEY (src, key, dst),
       FOREIGN KEY (src, key) REFERENCES chunk(src, key) ON DELETE CASCADE
     )""")
-
-    # known_pubkey
-    db.exec(sql"""CREATE TABLE known_pubkey (
-      pubkey TEXT PRIMARY KEY,
-      last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )""")
-    db.exec(sql"CREATE INDEX known_pubkey_last_seen ON known_pubkey(last_seen)")
   
   #----------- in-memory stuff
   db.exec(sql"""CREATE TEMPORARY TABLE note_sub (
@@ -222,7 +215,7 @@ proc addNoteSub(relay: Relay, topic: string, pubkey: PublicKey) =
   try:
     relay.db.exec(sql"INSERT INTO note_sub (topic, pubkey) VALUES (?,?)", topic.DbBlob, pubkey)
     info &"[{pubkey.abbr}] sub {topic}"
-  except:
+  except CatchableError:
     raise ValueError.newException("Topic already subscribed")
 
 proc getNoteSub(relay: Relay, topic: string): Option[PublicKey] =
@@ -246,7 +239,7 @@ proc popNote(relay: Relay, topic: string): Option[string] =
     else:
       debug &"[note] dne {topic}"
     db.exec(sql"COMMIT")
-  except:
+  except CatchableError:
     warn &"[note] error " & getCurrentExceptionMsg()
     db.exec(sql"ROLLBACK")
 
@@ -258,28 +251,6 @@ proc delNoteSub(relay: Relay, topic: string) =
 #-------------------------------------------------------------------
 # send/receive data
 #-------------------------------------------------------------------
-
-proc forgetOldPubkeys(relay: Relay) =
-  let offset = when TESTMODE:
-      -RELAY_PUBKEY_MEMORY_SECONDS + TIME_SKEW
-    else:
-      -RELAY_PUBKEY_MEMORY_SECONDS
-  let offstring = &"{offset} seconds"
-  relay.db.exec(sql"DELETE FROM known_pubkey WHERE last_seen <= datetime('now', ?)", offstring)
-
-proc rememberPubkey(relay: Relay, pubkey: PublicKey) =
-  let offset = when TESTMODE:
-      $TIME_SKEW & " seconds"
-    else:
-      "0 seconds"
-  relay.db.exec(sql"""
-    INSERT OR REPLACE INTO known_pubkey (pubkey, last_seen)
-    VALUES (?, datetime('now', ?))""", pubkey, offset)
-
-proc isKnown(relay: Relay, pubkey: PublicKey): bool =
-  relay.forgetOldPubkeys()
-  let orow = relay.db.getRow(sql"SELECT last_seen FROM known_pubkey WHERE pubkey = ?", pubkey)
-  return orow.isSome()
 
 proc delExpiredMessages(relay: Relay) =
   let offset = when TESTMODE:
@@ -314,7 +285,6 @@ proc delExpiredChunks(relay: Relay) =
     else:
       -RELAY_MESSAGE_DURATION
   let offstring = &"{offset} seconds"
-  echo "FRANK delExpiredChunks ", offstring
   relay.db.exec(sql"DELETE FROM chunk WHERE last_used <= datetime('now', ?)", offstring)
 
 
@@ -329,14 +299,16 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   of Iam:
     try:
       crypto_sign_verify_detached(cmd.iam_pubkey.string, conn.challenge, cmd.iam_signature)
-    except:
+    except SodiumError:
       conn.sendError("Invalid signature", cmd.kind, Generic)
+      return
+    except CatchableError:
+      conn.sendError("Error validating signature", cmd.kind, Generic)
       return
     # successful connection
     conn.pubkey = cmd.iam_pubkey
     relay.clients[conn.pubkey] = conn
     conn.challenge = "" # disable authentication
-    relay.rememberPubkey(conn.pubkey)
     info &"[{conn.pubkey.abbr}] connected"
     conn.sendOkay cmd.kind
 
@@ -401,11 +373,8 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         ))
       else:
         # dst is offline
-        if relay.isKnown(cmd.send_dst):
-          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
-              conn.pubkey, cmd.send_dst, cmd.send_val.DbBlob)
-        else:
-          discard "silently drop the message"
+        relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
+            conn.pubkey, cmd.send_dst, cmd.send_val.DbBlob)
   of StoreChunk:
     if cmd.chunk_key.len > RELAY_MAX_CHUNK_KEY_SIZE:
       conn.sendError("Key too long", cmd.kind, TooLarge)
@@ -421,7 +390,6 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
             $TIME_SKEW & " seconds"
           else:
             "0 seconds"
-        echo "FRANK offset: ", offset
         relay.db.exec(sql"""
           INSERT OR REPLACE INTO chunk (last_used, src, key, val)
           VALUES (datetime('now', ?), ?, ?, ?)
@@ -434,7 +402,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           relay.db.exec(sql"INSERT INTO chunk_dst (src, key, dst) VALUES (?, ?, ?)",
             conn.pubkey, cmd.chunk_key.DbBlob, dst)
         relay.db.exec(sql"COMMIT")
-      except:
+      except CatchableError:
         relay.db.exec(sql"ROLLBACK")
   of GetChunks:
     for key in cmd.chunk_keys:
