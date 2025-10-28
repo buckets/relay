@@ -10,6 +10,7 @@
 import std/base64
 import std/hashes
 import std/options
+import std/sequtils
 import std/strformat
 import std/strutils
 
@@ -118,6 +119,7 @@ proc nicelong*(o: Option[string]): string =
     result = o.get().nicelong()
 
 proc nice*(k: PublicKey): string = nice(k.string)
+proc `$`*(k: PublicKey): string = k.nice()
 proc hash*(p: PublicKey): Hash {.borrow.}
 proc `==`*(a,b: PublicKey): bool {.borrow.}
 
@@ -293,6 +295,24 @@ proc deserialize*(typ: typedesc[ErrorCode], ch: char): ErrorCode =
   of '1': TooLarge
   else: raise ValueError.newException("Unknown ErrorCode: " & ch)
 
+proc serialize*(keys: seq[PublicKey]): string =
+  for key in keys:
+    result &= nsencode(key.string)
+
+proc deserializePubKeys*(val: string): seq[PublicKey] =
+  var idx = 0
+  while idx < val.len:
+    result.add(val.nsdecode(idx).PublicKey)
+
+proc serialize*(s: seq[string]): string =
+  for item in s:
+    result &= nsencode(item)
+
+proc deserialize*(typ: typedesc[seq[string]], val: string): seq[string] =
+  var idx = 0
+  while idx < val.len:
+    result.add(val.nsdecode(idx))
+
 proc serialize*(msg: RelayMessage): string =
   result &= msg.kind.serialize()
   case msg.kind
@@ -311,7 +331,10 @@ proc serialize*(msg: RelayMessage): string =
     result &= msg.data_src.string.nsencode
     result &= msg.data_val.nsencode
   of Chunk:
-    discard
+    result &= msg.chunk_src.string.nsencode
+    result &= msg.chunk_key.nsencode
+    if msg.chunk_val.isSome:
+      result &= msg.chunk_val.get().nsencode
 
 
 proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
@@ -349,17 +372,86 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
       data_val: data_val,
     )
   of Chunk:
-    discard
+    var idx = 1
+    let chunk_src = s.nsdecode(idx).PublicKey
+    let chunk_key = s.nsdecode(idx)
+    let chunk_val = if idx >= s.len:
+        none[string]()
+      else:
+        some(s.nsdecode(idx))
+    return RelayMessage(
+      kind: Chunk,
+      chunk_src: chunk_src,
+      chunk_key: chunk_key,
+      chunk_val: chunk_val,
+    )
 
 proc serialize*(cmd: RelayCommand): string =
   result &= cmd.kind.serialize
+  case cmd.kind
+  of Iam:
+    result &= cmd.iam_pubkey.string.nsencode
+    result &= cmd.iam_signature.nsencode
+  of PublishNote:
+    result &= cmd.pub_topic.nsencode
+    result &= cmd.pub_data.nsencode
+  of FetchNote:
+    result &= cmd.fetch_topic.nsencode
+  of SendData:
+    result &= cmd.send_dst.string.nsencode
+    result &= cmd.send_val.nsencode
+  of StoreChunk:
+    result &= nsencode(cmd.chunk_dst.serialize())
+    result &= cmd.chunk_key.nsencode
+    result &= cmd.chunk_val.nsencode
+  of GetChunks:
+    result &= cmd.chunk_src.string.nsencode
+    result &= nsencode(cmd.chunk_keys.serialize())
 
 proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
   if s.len == 0:
     raise ValueError.newException("Empty RelayCommand")
   let kind = CommandKind.deserialize(s[0])
   case kind
-  of Iam: discard
-  of PublishNote: discard
-  of FetchNote: discard
-  of SendData: discard
+  of Iam:
+    var idx = 1
+    return RelayCommand(
+      kind: Iam,
+      iam_pubkey: s.nsdecode(idx).PublicKey,
+      iam_signature: s.nsdecode(idx),
+    )
+  of PublishNote:
+    var idx = 1
+    return RelayCommand(
+      kind: PublishNote,
+      pub_topic: s.nsdecode(idx),
+      pub_data: s.nsdecode(idx),
+    )
+  of FetchNote:
+    var idx = 1
+    return RelayCommand(
+      kind: FetchNote,
+      fetch_topic: s.nsdecode(idx),
+    )
+  of SendData:
+    var idx = 1
+    return RelayCommand(
+      kind: SendData,
+      send_dst: s.nsdecode(idx).PublicKey,
+      send_val: s.nsdecode(idx),
+    )
+  of StoreChunk:
+    var idx = 1
+    return RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: deserializePubKeys(s.nsdecode(idx)),
+      chunk_key: s.nsdecode(idx),
+      chunk_val: s.nsdecode(idx),
+    )
+  of GetChunks:
+    var idx = 1
+    return RelayCommand(
+      kind: GetChunks,
+      chunk_src: s.nsdecode(idx).PublicKey,
+      chunk_keys: deserialize(seq[string], s.nsdecode(idx)),
+    )
