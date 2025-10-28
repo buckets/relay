@@ -7,8 +7,9 @@ RUN nimble install -y https://github.com/iffy/pkger/
 COPY pkger.json .
 COPY ./pkger ./pkger
 RUN pkger fetch
-COPY . .
+COPY ./ ./
 COPY docker/config.nims .
+RUN find .
 RUN nim c -d:release -o:brelay src/server2.nim
 RUN strip brelay
 
