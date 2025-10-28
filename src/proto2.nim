@@ -32,6 +32,7 @@ type
     sender*: T
     pubkey*: PublicKey ## The authenticated pubkey
     challenge: string
+    relay*: Relay[T]
 
 when TESTMODE:
   var TIME_SKEW = 0
@@ -54,14 +55,11 @@ func strval*(dbval: sqlite.DbValue): string =
   else:
     raise ValueError.newException("Can't get string from " & $dbval.kind)
 
-proc toDB*(p: PublicKey): string =
-  base64.encode(p.string)
-
-proc fromDB*(t: typedesc[PublicKey], v: string): PublicKey =
-  base64.decode(v).PublicKey
+proc dbValue*(p: PublicKey): DbValue =
+  dbValue(p.string.DbBlob)
 
 proc fromDB*(t: typedesc[PublicKey], v: DbBlob): PublicKey =
-  base64.decode(v.string).PublicKey
+  v.string.PublicKey
 
 template patch(db: untyped, applied: seq[string], name: string, body: untyped): untyped =
   block:
@@ -80,6 +78,8 @@ template patch(db: untyped, applied: seq[string], name: string, body: untyped): 
       debug name, " - applied"
 
 proc updateSchema*(db: DbConn) =
+  db.exec(sql"PRAGMA foreign_keys = ON")
+
   ## Upgrade the schema
   db.exec(sql"""CREATE TABLE IF NOT EXISTS _schema_patches (
     id INTEGER PRIMARY KEY,
@@ -113,6 +113,23 @@ proc updateSchema*(db: DbConn) =
     db.exec(sql"CREATE INDEX message_created ON message(created)")
     db.exec(sql"CREATE INDEX message_dst ON message(dst)")
     
+    # chunks
+    db.exec(sql"""CREATE TABLE chunk (
+      src TEXT NOT NULL,
+      key TEXT NOT NULL,
+      last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      val BLOB NOT NULL,
+      PRIMARY KEY (src, key)
+    )""")
+    db.exec(sql"CREATE INDEX chunk_last_used ON chunk(last_used)")
+    db.exec(sql"""CREATE TABLE chunk_dst (
+      src TEXT NOT NULL,
+      key TEXT NOT NULL,
+      dst TEXT NOT NULL,
+      PRIMARY KEY (src, key, dst),
+      FOREIGN KEY (src, key) REFERENCES chunk(src, key) ON DELETE CASCADE
+    )""")
+
     # known_pubkey
     db.exec(sql"""CREATE TABLE known_pubkey (
       pubkey TEXT PRIMARY KEY,
@@ -126,7 +143,7 @@ proc updateSchema*(db: DbConn) =
     pubkey TEXT NOT NULL
   )""")
   db.exec(sql"CREATE INDEX note_sub_pubkey ON note_sub(pubkey)")
-  db.exec(sql"PRAGMA foreign_keys = ON")
+  
 
 #-------------------------------------------------------------------
 # Relay code
@@ -181,9 +198,10 @@ proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
     kind: Who,
     who_challenge: result.challenge,
   ))
+  result.relay = relay
 
 proc disconnect*[T](relay: Relay[T], conn: RelayConnection[T]) =
-  relay.db.exec(sql"DELETE FROM note_sub WHERE pubkey=?", conn.pubkey.toDB)
+  relay.db.exec(sql"DELETE FROM note_sub WHERE pubkey=?", conn.pubkey)
   relay.clients.del(conn.pubkey)
   info &"[{conn.pubkey.abbr}] disconnected"
 
@@ -202,7 +220,7 @@ proc delExpiredNotes(relay: Relay) =
 proc addNoteSub(relay: Relay, topic: string, pubkey: PublicKey) =
   ## Record that a pubkey is subscribed to a topic
   try:
-    relay.db.exec(sql"INSERT INTO note_sub (topic, pubkey) VALUES (?,?)", topic.DbBlob, pubkey.toDB)
+    relay.db.exec(sql"INSERT INTO note_sub (topic, pubkey) VALUES (?,?)", topic.DbBlob, pubkey)
     info &"[{pubkey.abbr}] sub {topic}"
   except:
     raise ValueError.newException("Topic already subscribed")
@@ -212,7 +230,7 @@ proc getNoteSub(relay: Relay, topic: string): Option[PublicKey] =
   relay.delExpiredNotes()
   let orow = relay.db.getRow(sql"SELECT pubkey FROM note_sub WHERE topic = ?", topic.DbBlob)
   if orow.isSome:
-    return some(PublicKey.fromDB(orow.get()[0].s))
+    return some(PublicKey.fromDB(orow.get()[0].b))
 
 proc popNote(relay: Relay, topic: string): Option[string] =
   let db = relay.db
@@ -250,13 +268,17 @@ proc forgetOldPubkeys(relay: Relay) =
   relay.db.exec(sql"DELETE FROM known_pubkey WHERE last_seen <= datetime('now', ?)", offstring)
 
 proc rememberPubkey(relay: Relay, pubkey: PublicKey) =
+  let offset = when TESTMODE:
+      $TIME_SKEW & " seconds"
+    else:
+      "0 seconds"
   relay.db.exec(sql"""
     INSERT OR REPLACE INTO known_pubkey (pubkey, last_seen)
-    VALUES (?, CURRENT_TIMESTAMP)""", pubkey.toDB)
+    VALUES (?, datetime('now', ?))""", pubkey, offset)
 
 proc isKnown(relay: Relay, pubkey: PublicKey): bool =
   relay.forgetOldPubkeys()
-  let orow = relay.db.getRow(sql"SELECT last_seen FROM known_pubkey WHERE pubkey = ?", pubkey.toDB)
+  let orow = relay.db.getRow(sql"SELECT last_seen FROM known_pubkey WHERE pubkey = ?", pubkey)
   return orow.isSome()
 
 proc delExpiredMessages(relay: Relay) =
@@ -276,15 +298,25 @@ proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
     ORDER BY
       created ASC,
       id ASC
-    LIMIT 1""", dst.toDB)
+    LIMIT 1""", dst)
   if orow.isSome:
     let row = orow.get()
     result = some(RelayMessage(
       kind: Data,
-      data_src: PublicKey.fromDB(row[0].s),
+      data_src: PublicKey.fromDB(row[0].b),
       data_val: row[1].b.string,
     ))
     relay.db.exec(sql"DELETE FROM message WHERE id=?", row[2].i)
+
+proc delExpiredChunks(relay: Relay) =
+  let offset = when TESTMODE:
+      -RELAY_MESSAGE_DURATION + TIME_SKEW
+    else:
+      -RELAY_MESSAGE_DURATION
+  let offstring = &"{offset} seconds"
+  echo "FRANK delExpiredChunks ", offstring
+  relay.db.exec(sql"DELETE FROM chunk WHERE last_used <= datetime('now', ?)", offstring)
+
 
 #-------------------------------------------------------------------
 # relay command handling
@@ -371,9 +403,74 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         # dst is offline
         if relay.isKnown(cmd.send_dst):
           relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
-              conn.pubkey.toDB, cmd.send_dst.toDB, cmd.send_val.DbBlob)
+              conn.pubkey, cmd.send_dst, cmd.send_val.DbBlob)
         else:
           discard "silently drop the message"
+  of StoreChunk:
+    if cmd.chunk_key.len > RELAY_MAX_CHUNK_KEY_SIZE:
+      conn.sendError("Key too long", cmd.kind, TooLarge)
+    elif cmd.chunk_val.len > RELAY_MAX_CHUNK_SIZE:
+      conn.sendError("Value too long", cmd.kind, TooLarge)
+    elif cmd.chunk_dst.len > RELAY_MAX_CHUNK_DSTS:
+      conn.sendError("Too many recipients", cmd.kind, TooLarge)
+    else:
+      relay.db.exec(sql"BEGIN")
+      try:
+        relay.db.exec(sql"DELETE FROM chunk_dst WHERE src=? AND key=?", conn.pubkey, cmd.chunk_key.DbBlob)
+        let offset = when TESTMODE:
+            $TIME_SKEW & " seconds"
+          else:
+            "0 seconds"
+        echo "FRANK offset: ", offset
+        relay.db.exec(sql"""
+          INSERT OR REPLACE INTO chunk (last_used, src, key, val)
+          VALUES (datetime('now', ?), ?, ?, ?)
+          """, offset, conn.pubkey, cmd.chunk_key.DbBlob, cmd.chunk_val.DbBlob)
+        var dsts: seq[PublicKey]
+        dsts.add(cmd.chunk_dst)
+        if conn.pubkey notin dsts:
+          dsts.add(conn.pubkey)
+        for dst in dsts:
+          relay.db.exec(sql"INSERT INTO chunk_dst (src, key, dst) VALUES (?, ?, ?)",
+            conn.pubkey, cmd.chunk_key.DbBlob, dst)
+        relay.db.exec(sql"COMMIT")
+      except:
+        relay.db.exec(sql"ROLLBACK")
+  of GetChunks:
+    for key in cmd.chunk_keys:
+      if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
+        conn.sendError("Key too long", cmd.kind, TooLarge)
+        return
+    relay.delExpiredChunks()
+    for key in cmd.chunk_keys:
+      let orow = relay.db.getRow(sql"""
+        SELECT
+          c.val
+        FROM
+          chunk_dst AS d
+          JOIN chunk AS c
+            ON d.src = c.src
+              AND d.key = c.key
+        WHERE
+          d.src = ?
+          AND d.key = ?
+          AND d.dst = ?
+        """, cmd.chunk_src, key.DbBlob, conn.pubkey)
+      if orow.isSome:
+        let row = orow.get()
+        conn.sendMessage(RelayMessage(
+          kind: Chunk,
+          chunk_src: cmd.chunk_src,
+          chunk_key: key,
+          chunk_val: some(row[0].b.string),
+        ))
+      else:
+        conn.sendMessage(RelayMessage(
+          kind: Chunk,
+          chunk_src: cmd.chunk_src,
+          chunk_key: key,
+          chunk_val: none[string](),
+        ))
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------

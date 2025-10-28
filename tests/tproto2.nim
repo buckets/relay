@@ -389,3 +389,189 @@ suite "data":
     skewTime(RELAY_MESSAGE_DURATION + 1)
     var bob2 = relay.authenticatedConn(bob.keys)
     check bob2.msgCount == 0
+
+
+proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[PublicKey]()) =
+  conn.relay.handleCommand(conn, RelayCommand(
+    kind: StoreChunk,
+    chunk_dst: dst,
+    chunk_key: key,
+    chunk_val: val,
+  ))
+
+proc getChunk(conn: var RelayConnection[TestClient], src: var RelayConnection[TestClient], key: string): Option[string] =
+  conn.relay.handleCommand(conn, RelayCommand(
+    kind: GetChunks,
+    chunk_src: src.pk,
+    chunk_keys: @[key],
+  ))
+  let chunk = conn.pop(Chunk)
+  return chunk.chunk_val
+
+suite "store":
+
+  test "basic":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[bob.pk],
+      chunk_key: "key1",
+      chunk_val: "\x00data1",
+    ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[bob.pk],
+      chunk_key: "key2",
+      chunk_val: "data2",
+    ))
+    check bob.msgCount == 0
+    
+    relay.handleCommand(bob, RelayCommand(
+      kind: GetChunks,
+      chunk_src: alice.pk,
+      chunk_keys: @["key1", "key2"],
+    ))
+    block:
+      let chunk = bob.pop(Chunk)
+      check chunk.chunk_src == alice.pk
+      check chunk.chunk_key == "key1"
+      check chunk.chunk_val.get() == "\x00data1"
+    block:
+      let chunk = bob.pop(Chunk)
+      check chunk.chunk_src == alice.pk
+      check chunk.chunk_key == "key2"
+      check chunk.chunk_val.get() == "data2"
+    
+    relay.handleCommand(alice, RelayCommand(
+      kind: GetChunks,
+      chunk_src: alice.pk,
+      chunk_keys: @["key2"],
+    ))
+    block:
+      let chunk = alice.pop(Chunk)
+      check chunk.chunk_src == alice.pk
+      check chunk.chunk_key == "key2"
+      check chunk.chunk_val.get() == "data2"
+  
+  test "overwrite":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    alice.storeChunk("key", "first")
+    alice.storeChunk("key", "second")
+    check alice.getChunk(alice, "key").get() == "second"
+
+  test "multiple dst":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    var carl = relay.authenticatedConn()
+    alice.storeChunk("key", "val", @[bob.pk, carl.pk])
+    check bob.getChunk(alice, "key").get() == "val"
+    check carl.getChunk(alice, "key").get() == "val"
+  
+  test "dne":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: GetChunks,
+      chunk_src: alice.pk,
+      chunk_keys: @["dne"],
+    ))
+    block:
+      let chunk = alice.pop(Chunk)
+      check chunk.chunk_src == alice.pk
+      check chunk.chunk_key == "dne"
+      check chunk.chunk_val.isNone()
+  
+  test "only dst allowed":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    alice.storeChunk("key", "first")
+    check bob.getChunk(alice, "key").isNone()
+
+  test "expiration":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    alice.storeChunk("key", "foo")
+    skewTime(RELAY_MESSAGE_DURATION + 1)
+    check alice.getChunk(alice, "key").isNone()
+  
+  test "expiration update":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    alice.storeChunk("key", "foo")
+    skewTime(RELAY_MESSAGE_DURATION - 1)
+    alice.storeChunk("key", "foo")
+    skewTime(3)
+    check alice.getChunk(alice, "key").get() == "foo"
+  
+  test "remove dst":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    var sam = relay.authenticatedConn()
+    alice.storeChunk("key", "first", @[bob.pk, sam.pk])
+    check bob.getChunk(alice, "key").get() == "first"
+    check sam.getChunk(alice, "key").get() == "first"
+    alice.storeChunk("key", "first", @[bob.pk])
+    check bob.getChunk(alice, "key").get() == "first"
+    check sam.getChunk(alice, "key").isNone()
+
+  test "max key len":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[],
+      chunk_key: "a".repeat(RELAY_MAX_CHUNK_KEY_SIZE + 1),
+      chunk_val: "data1",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == StoreChunk
+    check err.err_code == TooLarge
+
+  test "max val len":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[],
+      chunk_key: "a",
+      chunk_val: "a".repeat(RELAY_MAX_CHUNK_SIZE + 1),
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == StoreChunk
+    check err.err_code == TooLarge
+
+  test "max key len get":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: GetChunks,
+      chunk_src: alice.pk,
+      chunk_keys: @["a".repeat(RELAY_MAX_CHUNK_KEY_SIZE + 1)],
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == GetChunks
+    check err.err_code == TooLarge
+
+  test "max dst.len":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var dsts: seq[PublicKey]
+    for i in 0..(RELAY_MAX_CHUNK_DSTS+1):
+      var conn = relay.authenticatedConn()
+      dsts.add(conn.pk)
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: dsts,
+      chunk_key: "a",
+      chunk_val: "b",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == StoreChunk
+    check err.err_code == TooLarge

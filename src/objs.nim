@@ -7,9 +7,10 @@
 ## This file should be kept free of dependencies other than the stdlib
 ## as it's meant to be referenced by outside libraries.
 
-import std/strformat
 import std/base64
 import std/hashes
+import std/options
+import std/strformat
 import std/strutils
 
 type
@@ -22,6 +23,7 @@ type
     Error
     Note
     Data
+    Chunk
 
   ErrorCode* = enum
     Generic = 0
@@ -43,12 +45,18 @@ type
     of Data:
       data_src*: PublicKey
       data_val*: string
+    of Chunk:
+      chunk_src*: PublicKey
+      chunk_key*: string
+      chunk_val*: Option[string]
 
   CommandKind* = enum
     Iam
     PublishNote
     FetchNote
     SendData
+    StoreChunk
+    GetChunks
 
   RelayCommand* = object
     case kind*: CommandKind
@@ -63,20 +71,36 @@ type
     of SendData:
       send_dst*: PublicKey
       send_val*: string
+    of StoreChunk:
+      chunk_dst*: seq[PublicKey]
+      chunk_key*: string
+      chunk_val*: string
+    of GetChunks:
+      chunk_src*: PublicKey
+      chunk_keys*: seq[string]
 
 const
   RELAY_MAX_TOPIC_SIZE* = 512
   RELAY_MAX_NOTE_SIZE* = 4096
   RELAY_NOTE_DURATION* = 5 * 24 * 60 * 60
-  RELAY_MAX_MESSAGE_SIZE* = 100_000
+  RELAY_MAX_MESSAGE_SIZE* = 4096
+  RELAY_MAX_CHUNK_KEY_SIZE* = 4096
+  RELAY_MAX_CHUNK_SIZE* = 65536
+  RELAY_MAX_CHUNK_DSTS* = 32
   RELAY_MESSAGE_DURATION* = 30 * 24 * 60 * 60
   RELAY_PUBKEY_MEMORY_SECONDS* = 60 * 24 * 60 * 60
 
-template b64encode(x: string): string = base64.encode(x)
+const
+  nicestart = 'a' # '!'
+  niceend = 'z' # '~'
+  nicesize = ord(niceend) - ord(nicestart)
 
-proc `$`*(k: PublicKey): string = b64encode(k.string)
-proc hash*(p: PublicKey): Hash {.borrow.}
-proc `==`*(a,b: PublicKey): bool {.borrow.}
+proc nice*(s: string): string =
+  for c in s:
+    case c
+    of {'0'..'9', 'a'..'z', 'A'..'Z', ' '}: result.add c
+    else:
+      result.add chr(ord(c) mod nicesize + ord(nicestart))
 
 proc abbr*(s: string, size = 6): string =
   if s.len > size:
@@ -84,21 +108,36 @@ proc abbr*(s: string, size = 6): string =
   else:
     result.add(s)
 
-proc abbr*(a: PublicKey): string = abbr($a)
+proc nicelong*(s: string): string =
+  result = $s.len & ":" & s.nice.abbr & ","
+
+proc nicelong*(o: Option[string]): string =
+  if o.isNone:
+    result = "none"
+  else:
+    result = o.get().nicelong()
+
+proc nice*(k: PublicKey): string = nice(k.string)
+proc hash*(p: PublicKey): Hash {.borrow.}
+proc `==`*(a,b: PublicKey): bool {.borrow.}
+
+proc abbr*(a: PublicKey): string = abbr(a.nice)
 
 proc `$`*(msg: RelayMessage): string =
   result.add $msg.kind & "("
   case msg.kind
   of Who:
-    result.add "challenge=" & b64encode(msg.who_challenge).abbr
+    result.add "challenge=" & msg.who_challenge.nicelong
   of Okay:
     result.add &"cmd={msg.ok_cmd}"
   of Error:
-    result.add &"cmd={msg.err_cmd} code={msg.err_code} msg={msg.err_message}"
+    result.add &"cmd={msg.err_cmd} code={msg.err_code} msg={msg.err_message.nice}"
   of Note:
-    result.add &"'{msg.note_topic}' {msg.note_data.b64encode.abbr} ({msg.note_data.len})"
+    result.add &"'{msg.note_topic.nice}' val={msg.note_data.nicelong}"
   of Data:
-    result.add &"src={msg.data_src.abbr} data={msg.data_val.b64encode.abbr} ({msg.data_val.len})"
+    result.add &"{msg.data_src.nice.abbr} val={msg.data_val.nicelong}"
+  of Chunk:
+    result.add &"{msg.chunk_src.nice.abbr} {msg.chunk_key.nice.abbr}={msg.chunk_val.nicelong}"
   result.add ")"
 
 proc `==`*(a, b: RelayMessage): bool =
@@ -116,18 +155,30 @@ proc `==`*(a, b: RelayMessage): bool =
       return a.note_data == b.note_data and a.note_topic == b.note_topic
     of Data:
       return a.data_src == b.data_src and a.data_val == b.data_val
+    of Chunk:
+      return a.chunk_src == b.chunk_src and a.chunk_key == b.chunk_key and a.chunk_val == b.chunk_val
 
 proc `$`*(cmd: RelayCommand): string =
   result.add $cmd.kind & "("
   case cmd.kind
   of Iam:
-    result.add &"{cmd.iam_pubkey.abbr} sig={cmd.iam_signature.b64encode.abbr}"
+    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong}"
   of PublishNote:
-    result.add &"'{cmd.pub_topic}' data={cmd.pub_data.b64encode}"
+    result.add &"'{cmd.pub_topic.nice.abbr}' val={cmd.pub_data.nicelong}"
   of FetchNote:
-    result.add &"'{cmd.fetch_topic}'"
+    result.add &"'{cmd.fetch_topic.nice.abbr}'"
   of SendData:
-    result.add &"{cmd.send_dst.abbr} data={cmd.send_val.b64encode.abbr} ({cmd.send_val.len})"
+    result.add &"{cmd.send_dst.nice.abbr} val={cmd.send_val.nicelong}"
+  of StoreChunk:
+    result.add &"{cmd.chunk_key.nice.abbr}={cmd.chunk_val.nicelong} dst=["
+    for dst in cmd.chunk_dst:
+      result.add dst.nice.abbr & ", "
+    result.add "]"
+  of GetChunks:
+    result.add &"{cmd.chunk_src.nice.abbr} keys=["
+    for key in cmd.chunk_keys:
+      result.add key.nice.abbr & ", "
+    result.add "]"
   result.add ")"
 
 proc `==`*(a, b: RelayCommand): bool =
@@ -143,6 +194,10 @@ proc `==`*(a, b: RelayCommand): bool =
       return a.fetch_topic == b.fetch_topic
     of SendData:
       return a.send_dst == b.send_dst and a.send_val == b.send_val
+    of StoreChunk:
+      return a.chunk_dst == b.chunk_dst and a.chunk_key == b.chunk_key and a.chunk_val == b.chunk_val
+    of GetChunks:
+      return a.chunk_src == b.chunk_src and a.chunk_keys == b.chunk_keys
 
 #--------------------------------------------------------------
 # serialization
@@ -196,6 +251,7 @@ proc serialize*(kind: MessageKind): char =
   of Error: '-'
   of Note: 'n'
   of Data: 'd'
+  of Chunk: 'k'
 
 proc deserialize*(kind: typedesc[MessageKind], val: char): MessageKind =
   case val
@@ -204,6 +260,7 @@ proc deserialize*(kind: typedesc[MessageKind], val: char): MessageKind =
   of '-': Error
   of 'n': Note
   of 'd': Data
+  of 'k': Chunk
   else: raise ValueError.newException("Unknown MessageKind: " & val)
 
 proc serialize*(kind: CommandKind): char =
@@ -212,6 +269,8 @@ proc serialize*(kind: CommandKind): char =
   of PublishNote: 'p'
   of FetchNote: 'f'
   of SendData: 's'
+  of StoreChunk: 'c'
+  of GetChunks: 'g'
 
 proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   case val:
@@ -219,6 +278,8 @@ proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   of 'p': PublishNote
   of 'f': FetchNote
   of 's': SendData
+  of 'c': StoreChunk
+  of 'g': GetChunks
   else: raise ValueError.newException("Unknown CommandKind: " & val)
 
 proc serialize*(err: ErrorCode): char =
@@ -249,6 +310,9 @@ proc serialize*(msg: RelayMessage): string =
   of Data:
     result &= msg.data_src.string.nsencode
     result &= msg.data_val.nsencode
+  of Chunk:
+    discard
+
 
 proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
   if s.len == 0:
@@ -284,6 +348,8 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
       data_src: data_src,
       data_val: data_val,
     )
+  of Chunk:
+    discard
 
 proc serialize*(cmd: RelayCommand): string =
   result &= cmd.kind.serialize
