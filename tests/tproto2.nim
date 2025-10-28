@@ -1,5 +1,6 @@
 import std/deques
 import std/logging
+import std/options
 import std/os
 import std/strutils
 import std/unittest
@@ -302,7 +303,7 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: bob.pk,
+      dst: @[bob.pk],
       data: "hel\x00lo",
     ))
 
@@ -318,7 +319,7 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: bob1.pk,
+      dst: @[bob1.pk],
       data: "hel\x00lo",
     ))
 
@@ -333,7 +334,7 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: alice.pk,
+      dst: @[alice.pk],
       data: "a".repeat(RELAY_MAX_MESSAGE_SIZE + 1),
     ))
     let err = alice.pop(Error)
@@ -347,7 +348,7 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: bobkeys.pk,
+      dst: @[bobkeys.pk],
       data: "a",
     ))
     check alice.msgCount == 0
@@ -365,7 +366,7 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: bob.pk,
+      dst: @[bob.pk],
       data: "a",
     ))
     check alice.msgCount == 0
@@ -381,10 +382,46 @@ suite "data":
 
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      dst: bob.pk,
+      dst: @[bob.pk],
       data: "hello",
     ))
 
     skewTime(RELAY_MESSAGE_DURATION + 1)
     var bob2 = relay.authenticatedConn(bob.keys)
     check bob2.msgCount == 0
+
+  test "multiple dst":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    relay.disconnect(bob)
+
+    var carl = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: @[bob.pk],
+      data: "first",
+    ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: @[bob.pk, carl.pk],
+      data: "second",
+    ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: @[carl.pk, bob.pk],
+      data: "third",
+    ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      dst: @[carl.pk],
+      data: "fourth",
+    ))
+    var bob2 = relay.authenticatedConn(bob.keys)
+    check bob2.pop(Data).data_val == "first"
+    check bob2.pop(Data).data_val == "second"
+    check bob2.pop(Data).data_val == "third"
+    check carl.pop(Data).data_val == "second"
+    check carl.pop(Data).data_val == "third"
+    check carl.pop(Data).data_val == "fourth"
+    check relay.db.getRow(sql"SELECT id FROM message").isNone()

@@ -60,7 +60,7 @@ type
     of FetchNote:
       fetch_topic*: string
     of SendData:
-      dst*: PublicKey
+      dst*: seq[PublicKey]
       data*: string
 
 const
@@ -86,7 +86,7 @@ proc abbr*(s: string, size = 6): string =
 proc abbr*(a: PublicKey): string = abbr($a)
 
 proc `$`*(msg: RelayMessage): string =
-  result.add "(" & $msg.kind & " "
+  result.add $msg.kind & "("
   case msg.kind
   of Who:
     result.add "challenge=" & b64encode(msg.who_challenge).abbr
@@ -101,7 +101,7 @@ proc `$`*(msg: RelayMessage): string =
   result.add ")"
 
 proc `$`*(cmd: RelayCommand): string =
-  result.add "(" & $cmd.kind & " "
+  result.add $cmd.kind & "("
   case cmd.kind
   of Iam:
     result.add &"{cmd.iam_pubkey.abbr} sig={cmd.iam_signature.b64encode.abbr}"
@@ -110,5 +110,8 @@ proc `$`*(cmd: RelayCommand): string =
   of FetchNote:
     result.add &"'{cmd.fetch_topic}'"
   of SendData:
-    result.add &"dst={cmd.dst.abbr} data={cmd.data.b64encode.abbr} ({cmd.data.len})"
+    result.add &"data={cmd.data.b64encode.abbr} ({cmd.data.len}) dst=["
+    for dst in cmd.dst:
+      result.add dst.abbr & " "
+    result.add "]"
   result.add ")"

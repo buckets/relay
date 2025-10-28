@@ -25,7 +25,7 @@ type
     sk: SecretKey
 
   Relay*[T] = object
-    db: DbConn
+    db*: DbConn
     clients: TableRef[PublicKey, RelayConnection[T]]
   
   RelayConnection*[T] = ref object
@@ -94,21 +94,61 @@ proc updateSchema*(db: DbConn) =
   info "Already applied patches: ", applied.join(",")
 
   db.patch(applied, "initial"):
+    # note
     db.exec(sql"""CREATE TABLE note (
       topic TEXT PRIMARY KEY,
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       data BLOB DEFAULT ''
     )""")
     db.exec(sql"CREATE INDEX note_created ON note(created)")
+    
+    # message
     db.exec(sql"""CREATE TABLE message (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       src TEXT NOT NULL,
-      dst TEXT NOT NULL,
       data BLOB NOT NULL
     )""")
     db.exec(sql"CREATE INDEX message_created ON message(created)")
-    db.exec(sql"CREATE INDEX message_dst ON message(dst)")
+    
+    # message_route
+    db.exec(sql"""CREATE TABLE message_route (
+      id INTEGER PRIMARY KEY,
+      message_id INTEGER REFERENCES message(id) ON DELETE CASCADE,
+      dst TEXT NOT NULL
+    )""")
+    db.exec(sql"CREATE INDEX message_route_dst ON message_route(dst)")
+    
+    # message_dst
+    db.exec(sql"""CREATE VIEW message_dst AS
+    SELECT
+      m.id,
+      m.created,
+      m.src,
+      r.dst,
+      m.data,
+      r.id AS route_id
+    FROM
+      message_route AS r
+      JOIN message AS m
+        ON m.id = r.message_id
+    """)
+
+    # auto-delete message orphans
+    db.exec(sql"""
+      CREATE TRIGGER IF NOT EXISTS delete_orphaned_message
+      AFTER DELETE ON message_route
+      FOR EACH ROW
+      BEGIN
+          DELETE FROM message
+          WHERE id = OLD.message_id
+            AND NOT EXISTS (
+                SELECT 1 FROM message_route WHERE message_id = OLD.message_id
+            );
+      END;
+    """)
+    
+    # known_pubkey
     db.exec(sql"""CREATE TABLE known_pubkey (
       pubkey TEXT PRIMARY KEY,
       last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -121,6 +161,7 @@ proc updateSchema*(db: DbConn) =
     pubkey TEXT NOT NULL
   )""")
   db.exec(sql"CREATE INDEX note_sub_pubkey ON note_sub(pubkey)")
+  db.exec(sql"PRAGMA foreign_keys = ON")
 
 #-------------------------------------------------------------------
 # Relay code
@@ -179,6 +220,7 @@ proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
 proc disconnect*[T](relay: Relay[T], conn: RelayConnection[T]) =
   relay.db.exec(sql"DELETE FROM note_sub WHERE pubkey=?", conn.pubkey.toDB)
   relay.clients.del(conn.pubkey)
+  info &"[{conn.pubkey.abbr}] disconnected"
 
 #-------------------------------------------------------------------
 # pub/sub notes
@@ -262,8 +304,8 @@ proc delExpiredMessages(relay: Relay) =
 
 proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
   let orow = relay.db.getRow(sql"""
-    SELECT id, src, data
-    FROM message
+    SELECT src, data, route_id
+    FROM message_dst
     WHERE
       dst = ?
     ORDER BY
@@ -274,10 +316,10 @@ proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
     let row = orow.get()
     result = some(RelayMessage(
       kind: Data,
-      data_src: PublicKey.fromDB(row[1].s),
-      data_val: row[2].b.string,
+      data_src: PublicKey.fromDB(row[0].s),
+      data_val: row[1].b.string,
     ))
-    relay.db.exec(sql"DELETE FROM message WHERE id=?", row[0].i)
+    relay.db.exec(sql"DELETE FROM message_route WHERE id=?", row[2].i)
 
 #-------------------------------------------------------------------
 # relay command handling
@@ -298,7 +340,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     relay.clients[conn.pubkey] = conn
     conn.challenge = "" # disable authentication
     relay.rememberPubkey(conn.pubkey)
-    info &"[{conn.pubkey}] connected"
+    info &"[{conn.pubkey.abbr}] connected"
     conn.sendOkay cmd.kind
 
     # send all queued messages
@@ -352,22 +394,28 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     if cmd.data.len > RELAY_MAX_MESSAGE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
     else:
-      if relay.clients.hasKey(cmd.dst):
-        # someone is waiting
-        var other_conn = relay.clients[cmd.dst]
-        other_conn.sendMessage(RelayMessage(
-          kind: Data,
-          data_src: conn.pubkey,
-          data_val: cmd.data,
-        ))
-      else:
-        # no one is waiting
-        if relay.isKnown(cmd.dst):
-          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?,?,?)",
-            conn.pubkey.toDB, cmd.dst.toDB, cmd.data.DbBlob,
-          )
+      var message_id: Option[int64]
+      for dst in cmd.dst:
+        if relay.clients.hasKey(dst):
+          # dst is online
+          var other_conn = relay.clients[dst]
+          other_conn.sendMessage(RelayMessage(
+            kind: Data,
+            data_src: conn.pubkey,
+            data_val: cmd.data,
+          ))
         else:
-          discard "silently drop the message"
+          # dst is offline
+          if relay.isKnown(dst):
+            if message_id.isNone:
+              # first one of the recipients that's offline
+              let rowid = relay.db.insertID(sql"INSERT INTO message (src, data) VALUES (?, ?)",
+                conn.pubkey.toDB, cmd.data.DbBlob)
+              message_id = some(rowid)
+            relay.db.exec(sql"INSERT INTO message_route (message_id, dst) VALUES (?, ?)",
+              message_id.get(), dst.toDB)
+          else:
+            discard "silently drop the message"
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------
