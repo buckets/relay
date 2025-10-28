@@ -19,7 +19,7 @@ var connections = newSeq[WebSocket]()
 proc cb(req: Request) {.async, gcsafe.} =
   if req.url.path == "/":
     var html = ""
-    compileTemplateFile("templates/index.html", baseDir = getScriptDir(), autoEscape = true, varname = "html")
+    compileTemplateFile("templates/index.nimja", baseDir = getScriptDir(), autoEscape = true, varname = "html")
     await req.respond(Http200, html)
   elif req.url.path == "/static/favicon.png":
     await req.respond(Http200, favicon_png)
