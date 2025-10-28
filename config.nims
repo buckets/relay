@@ -1,6 +1,6 @@
 # See LICENSE.md for licensing
 switch("gc", "orc")
-switch("threads", "on")
+switch("threads", "off")
 
 import os
 const ROOT = currentSourcePath.parentDir()

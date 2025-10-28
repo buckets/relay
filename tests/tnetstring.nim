@@ -1,88 +1,61 @@
 import std/unittest
 
-import bucketsrelay/netstring
+import objs
 
-test "nsencode":
-  check nsencode("apple") == "5:apple,"
-  check nsencode("") == "0:,"
-  check nsencode("banana\x00,") == "8:banana\x00,,"
+suite "encode":
+  test "nsencode":
+    check nsencode("apple") == "5:apple,"
+    check nsencode("") == "0:,"
+    check nsencode("banana\x00,") == "8:banana\x00,,"
 
-test "nsencode newline allowed instead of comma":
-  check nsencode("apple", '\n') == "5:apple\n"
-  check nsencode("", '\n') == "0:\n"
-  check nsencode("banana\x00\n", '\n') == "8:banana\x00\n\n"
+  test "nsencode newline allowed instead of comma":
+    check nsencode("apple", '\n') == "5:apple\n"
+    check nsencode("", '\n') == "0:\n"
+    check nsencode("banana\x00\n", '\n') == "8:banana\x00\n\n"
 
-suite "NetstringDecoder":
+suite "decode":
 
-  test "netstring in, message out":
-    var ns = newNetstringDecoder()
-    ns.consume("5:apple,")
-    check ns.len == 1
-    ns.consume("7:bana")
-    check ns.len == 1
-    ns.consume("na\x00,3:foo,3:bar")
-    check ns.len == 3
-    ns.consume(",")
-    check ns.len == 4
-    check ns.nextMessage() == "apple"
-    check ns.nextMessage() == "banana\x00"
-    check ns.nextMessage() == "foo"
-    check ns.nextMessage() == "bar"
+  test "basic":
+    check nsdecode("5:apple,") == "apple"
+  
+  test "incomplete":
+    expect(IncompleteNetstring):
+      discard nsdecode("7:bana")
+  
+  test "2 strings":
+    var idx = 0
+    check nsdecode("5:apple,3:f\x00o,", idx) == "apple"
+    check nsdecode("5:apple,3:f\x00o,", idx) == "f\x00o"
   
   test "newline delimiter":
-    var ns = newNetstringDecoder('\n')
-    ns.consume("5:apple\n")
-    check ns.len == 1
-    ns.consume("7:bana")
-    check ns.len == 1
-    ns.consume("na\x00\n3:foo\n3:bar")
-    check ns.len == 3
-    ns.consume("\n")
-    check ns.len == 4
-    check ns.nextMessage() == "apple"
-    check ns.nextMessage() == "banana\x00"
-    check ns.nextMessage() == "foo"
-    check ns.nextMessage() == "bar"
+    check nsdecode(nsencode("apple", '\n')) == "apple"
 
   test "empty string":
-    var ns = newNetstringDecoder()
-    ns.consume("0:,")
-    check ns.nextMessage() == ""
+    check nsdecode("0:,") == ""
   
   test "can't start with 0":
-    var ns = newNetstringDecoder()
-    expect(Exception):
-      ns.consume("01:,")
+    expect(NetstringError):
+      discard nsdecode("01:a,")
   
   test "can't include non-numerics":
-    var ns = newNetstringDecoder()
-    expect(Exception):
-      ns.consume("1a:,")
+    expect(NetstringError):
+      discard nsdecode("1a:,")
   
   test ": required":
-    var ns = newNetstringDecoder()
-    expect(Exception):
-      ns.consume("1f,")
+    expect(NetstringError):
+      discard nsdecode("1f,")
   
   test ", required":
-    var ns = newNetstringDecoder()
-    expect(Exception):
-      ns.consume("1:a2:ab,")
+    expect(NetstringError):
+      discard nsdecode("1:a2:ab,")
   
   test "len required":
-    var ns = newNetstringDecoder()
-    expect(Exception):
-      ns.consume(":s,")
+    expect(NetstringError):
+      discard nsdecode(":s,")
 
   test "max message length":
-    var ns = newNetstringDecoder()
-    
-    ns.maxlen = 4
-    ns.consume("4:fooa,")
-    expect(Exception):
-      ns.consume("5:")
-    ns.reset()
-
-    ns.maxlen = 10000
-    expect(Exception):
-      ns.consume("100000")
+    check nsdecode("4:boom,", maxlen=4) == "boom"
+    expect(NetstringError):
+      discard nsdecode("5:apple,", maxlen=4)
+    expect(NetstringError):
+      discard nsdecode("200:a", maxlen=100)

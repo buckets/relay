@@ -8,34 +8,30 @@ This repository contains the open source code for the [Buckets](https://www.budg
 
 You can use the publicly available relay at <https://relay.budgetwithbuckets.com>
 
-## Quickstart
+## Quickstart w/ Docker/Podman
 
-If you want to run the relay on your own computer, do the following:
+If you want to run the relay on with docker:
 
-1. Install [Nim](https://nim-lang.org/)
-2. Get the code:
+1. Get the code:
 
 ```
 git clone https://github.com/buckets/relay.git buckets-relay.git
 cd buckets-relay.git
 ```
 
-3. Install dependencies
+2. Build the image
 
 ```
-nimble install https://github.com/iffy/pkger/
-pkger fetch
+docker build -f docker/Dockerfile -t buckets/relay .
 ```
 
-4. Run the server:
+3. Run it:
 
-TODO:
-
-```sh
-nim r src/brelay.nim server
+```
+docker run -it --rm -p 8080:8080 buckets/relay
 ```
 
-This will launch the relay on the default port. Run with `--help` for more options.
+Read `docker/Dockerfile` to get an idea of how to build it yourself if you'd like.
 
 ## Security
 
@@ -43,43 +39,15 @@ This will launch the relay on the default port. Run with `--help` for more optio
 - This relay server can see all traffic, so clients should encrypt data intended for other clients.
 - Clients should also authenticate each other through the relay and not trust the authentication done by this server.
 
-## Development
-
-TODO:
-
-To run the server locally:
-
-```sh
-nimble run brelay server
-```
-
-## Deployment to fly.io
-
-If you'd like to run a relay server on [fly.io](https://fly.io/), sign up for the service then do one of the following. If you'd like to host somewhere else, you could use the Dockerfiles in [docker/](./docker/) as a starting point.
-
-TODO:
-
-### Single-user mode
-
-```sh
-fly launch --dockerfile docker/singleuser.Dockerfile
-```
-
-### Multi-user mode
-
-```sh
-fly launch --dockerfile docker/multiuser.Dockerfile
-```
-
 ## Protocol
 
-Relay clients communicate with the relay server using the following protocol. See [./src/bucketsrelay/proto.nim](./src/bucketsrelay/proto.nim) for more information, and [./src/bucketsrelay/stringproto.nim](./src/bucketsrelay/stringproto.nim) for encoding details.
+Relay clients communicate with the relay server using the following protocol. See [./src/proto2.nim](./src/proto2.nim) for more information.
 
-In summary, devices connect with websockets and exchange messages. Messages sent from client to server are called commands. Messages sent from server to client are called events.
+In summary, devices connect with websockets and exchange messages. Messages sent from client to server are called *commands*. Messages sent from server to client are called *events*.
 
 ### Authentication
 
-Clients authenticate with the server with a public/private key. A single person may have multiple public/private keys; typically one for each device.
+Clients authenticate with the server using a public/private key. A single person may have multiple public/private keys; typically one for each device.
 
 ### Client Commands
 
@@ -91,6 +59,9 @@ Clients send the following commands:
 | `PublishNote`  | Send a few bytes to another client addressed by topic (good for key exchange) |
 | `FetchNote`    | Request a note addressed by topic |
 | `SendData`     | Store/forward bytes to other clients, addressed by relay-authenticated public keys |
+| `StoreChunk`   | Store bytes for other clients to fetch addressed by key and public key. |
+| `GetChunk`     | Request stored chunk |
+
 
 ### Server Events
 
@@ -103,10 +74,9 @@ The relay server sends the following events:
 | `Who`           | Challenge for authenticating a client's public/private keys |
 | `Note`          | Data payload of a note requested by `FetchNote` |
 | `Data`          | Data payload from another client, addressed by relay-authenticated public key |
+| `Chunk`         | Data payload response to `GetChunk` request |
 
-### Sequences and Usage
-
-#### Authentication
+### Authentication
 
 Authentication happens like this:
 
@@ -128,9 +98,17 @@ Client           Relay
  │                 │
 ```
 
-#### Notes
+### Data
 
-After authenticating, clients can send each other short notes, addressed by a string *topic*. Each note expires after a time and will only ever been sent to one client who. The `FetchNote` command may be sent before or after the note is published. It works like this:
+There are 3 ways clients can exchange data:
+
+1. Notes - public notes that are accessed by knowing the note *topic*. Notes are a good way to do key exchange. Notes expire after a short time.
+2. Messages - ordered, stored-and-forwarded messages sent from one client to another client. These are automatically sent to a client upon connection, and deleted when sent. Messages expire after a while.
+3. Chunks - clients store chunks with a string *key* and choose which clients (by their public key) are allowed to fetch uploaded chunks. Chunks may be overwritten. Chunks expire a while after their last update.
+
+All forms of exchanging data are unreliable. Build with that in mind.
+
+#### Notes
 
 1. Alice sends `PublishNote(topic=apple, data=something)`
 2. Bob sends `FetchNote(topic=apple)`
@@ -150,13 +128,9 @@ Alice                 Relay                 Bob
   │                     │                    │
 ```
 
-#### Data
+#### Messages
 
-After authenticating, clients may send data to be stored and forwarded to clients next time they connect. Stored data expires after a time. Messages sent to unknown public keys will be dropped without notice. In other words, the transport is unreliable by design.
-
-Here's how it works:
-
-1. Alice sends `SendData(dst=[BOBPK], data=hello)`
+1. Alice sends `SendData(dst=BOBPK, data=hello)`
 2. Server sends to Bob `Data(src=ALICEPK, data=hello)`
 
 ```
@@ -170,4 +144,22 @@ Alice             Relay              Bob
   │                 │                 │
 ```
 
-Note that when multiple recipients are specified in a `SendData` command, all recipients will receive one copy of the message (assuming the message doesn't expire or get discarded instead).
+#### Chunks
+
+1. Alice sends `StoreChunk(dst=[BOBPK], key=apple, val=seed)`
+2. Bob sends `GetChunks(src=ALICEPK, keys=[apple])`
+3. Server sends `Chunk(src=ALICEPK, key=apple, val=seed)`
+
+```
+Alice                 Relay                 Bob
+  │                     │                    │
+  ├───────Authenticated─|─Authenticated──────┤
+  │                     │                    │
+  │ StoreChunk(apple)   |                    │
+  ├────────────────────►│ GetChunks([apple]) |
+  │                     │◄───────────────────┤
+  │                     │                    │
+  │                     │ Chunk(apple)       │
+  │                     │───────────────────►│
+  │                     │                    │
+```

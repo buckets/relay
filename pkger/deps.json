@@ -31,10 +31,10 @@
       "pkgname": "nimja",
       "parent": "",
       "src": {
-        "url": "https://github.com/enthus1ast/nimja",
+        "url": "https://github.com/iffy/nimja",
         "kind": "git"
       },
-      "sha": "438fc1f6c654c69cd85c9a5d9cbe45a48f507f8c"
+      "sha": "3ce4c093e3699317b4cdf69111bca38e8e0f2b69"
     },
     "db_connector": {
       "pkgname": "db_connector",
@@ -44,6 +44,15 @@
         "kind": "git"
       },
       "sha": "74aef399e5c232f95c9fc5c987cebac846f09d62"
+    },
+    "argparse": {
+      "pkgname": "argparse",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/iffy/nim-argparse",
+        "kind": "git"
+      },
+      "sha": "98c7c99bfbcaae750ac515a6fd603f85ed68668f"
     }
   }
 }

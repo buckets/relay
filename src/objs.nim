@@ -207,17 +207,23 @@ proc `==`*(a, b: RelayCommand): bool =
 # TODO: consider if this should belong in a different file
 #--------------------------------------------------------------
 
-proc nsencode*(x: string): string =
-  ## Encode a string as a netstring
-  $len(x) & ":" & x & ","
+const MAX_NETSTRING = 65536
 
-proc nsdecode*(x: string, start: var int = 0): string =
+type
+  NetstringError* = object of CatchableError
+  IncompleteNetstring* = object of NetstringError
+
+proc nsencode*(x: string, terminal = ','): string =
+  ## Encode a string as a netstring
+  $len(x) & ":" & x & terminal
+
+proc nsdecode*(x: string, start: var int, maxlen = MAX_NETSTRING): string =
   ## Read the netstring from x starting at index `start`
   ## start will be moved to the next netstring location
   if x.len == 0:
-    raise ValueError.newException("Empty string is invalid netstring")
+    raise NetstringError.newException("Empty string is invalid netstring")
   var cursor = start
-  # get length prefix
+  # 1. get length prefix
   var expectedLength = 0
   block:
     var buf = ""
@@ -227,23 +233,34 @@ proc nsdecode*(x: string, start: var int = 0): string =
       case ch
       of '0'..'9':
         buf.add(ch)
+        if buf.parseInt > maxlen:
+          raise NetstringError.newException("Exceeds max length")
       of ':':
+        if buf.len == 0:
+          raise NetstringError.newException("Missing starting length")
+        if buf.len >= 2 and buf[0] == '0':
+          raise NetstringError.newException("Invalid starting length")
         expectedLength = buf.parseInt()
         break
       else:
-        raise ValueError.newException("Invalid length character: " & ch & " at position " & $cursor)
+        raise NetstringError.newException("Invalid length character: " & ch & " at position " & $cursor)
   
-  # check for terminal and length
+  # 2. check for terminal and length
   let terminalIdx = cursor + expectedLength
   if terminalIdx >= x.len:
-    raise ValueError.newException("Netstring incomplete")
+    raise IncompleteNetstring.newException("Netstring incomplete")
   
   let terminalCh = x[terminalIdx]
   if terminalCh notin {',','\n'}:
-    raise ValueError.newException("Invalid terminal character: " & terminalCh)
+    raise NetstringError.newException("Invalid terminal character: " & terminalCh)
   
+  # 3. get string
   result = x[cursor..(cursor + expectedLength - 1)]
   start = terminalIdx + 1
+
+proc nsdecode*(x: string, maxlen = MAX_NETSTRING): string =
+  var idx = 0
+  return nsdecode(x, idx, maxlen = maxlen)
 
 
 proc serialize*(kind: MessageKind): char =
