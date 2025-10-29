@@ -10,3 +10,5 @@ _tests
 fly.toml
 relay.sqlite
 libs
+*.keys
+*.sqlite

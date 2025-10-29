@@ -21,6 +21,14 @@ suite "decode":
   test "incomplete":
     expect(IncompleteNetstring):
       discard nsdecode("7:bana")
+    expect(IncompleteNetstring):
+      discard nsdecode("")
+    expect(IncompleteNetstring):
+      discard nsdecode("1")
+    expect(IncompleteNetstring):
+      discard nsdecode("10:")
+    expect(IncompleteNetstring):
+      discard nsdecode("10:1234567890")
   
   test "2 strings":
     var idx = 0

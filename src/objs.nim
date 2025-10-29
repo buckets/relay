@@ -222,14 +222,17 @@ proc nsdecode*(x: string, start: var int, maxlen = MAX_NETSTRING): string =
   ## Read the netstring from x starting at index `start`
   ## start will be moved to the next netstring location
   if x.len == 0:
-    raise NetstringError.newException("Empty string is invalid netstring")
+    raise IncompleteNetstring.newException("Empty string is invalid netstring")
   var cursor = start
   # 1. get length prefix
   var expectedLength = 0
   block:
     var buf = ""
     while true:
-      let ch = x[cursor]
+      let ch = try:
+          x[cursor]
+        except IndexDefect:
+          raise IncompleteNetstring.newException("Not complete")
       cursor.inc()
       case ch
       of '0'..'9':

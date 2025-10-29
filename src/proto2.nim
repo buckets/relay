@@ -339,11 +339,15 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         relay.delNoteSub(cmd.pub_topic)
       else:
         # no one is waiting
-        relay.db.exec(sql"INSERT INTO note (topic, data) VALUES (?, ?)",
-          cmd.pub_topic.DbBlob,
-          cmd.pub_data.DbBlob,
-        )
-        conn.sendOkay cmd.kind
+        try:
+          relay.db.exec(sql"INSERT INTO note (topic, data) VALUES (?, ?)",
+            cmd.pub_topic.DbBlob,
+            cmd.pub_data.DbBlob,
+          )
+          conn.sendOkay cmd.kind
+        except:
+          conn.sendError("Duplicate topic", cmd.kind, Generic)
+          echo "FRANK post sendError"
   of FetchNote:
     if cmd.fetch_topic.len > RELAY_MAX_TOPIC_SIZE:
       conn.sendError("Topic too long", cmd.kind, TooLarge)
@@ -439,6 +443,9 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           chunk_key: key,
           chunk_val: none[string](),
         ))
+  echo "FRANK post case statement"
+  when LOG_COMMS:
+    info "[" & conn.pubkey.abbr & "] DONE " & $cmd
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------

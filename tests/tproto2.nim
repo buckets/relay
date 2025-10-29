@@ -151,6 +151,35 @@ suite "PublishNote":
     let data = bob.pop(Note)
     check data.note_data == "somedata"
     check data.note_topic == "sometopic"
+  
+  test "same topic":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "sometopic",
+      pub_data: "somedata",
+    ))
+    let ok = alice.pop(Okay)
+    check ok.ok_cmd == PublishNote
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "sometopic",
+      pub_data: "new data",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == PublishNote
+
+    relay.handleCommand(bob, RelayCommand(
+      kind: FetchNote,
+      fetch_topic: "sometopic",
+    ))
+    let data = bob.pop(Note)
+    check data.note_data == "somedata"
+    check data.note_topic == "sometopic"
 
   test "fetch first":
     let relay = testRelay()
