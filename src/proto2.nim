@@ -164,11 +164,6 @@ proc newRelay*[T](db: DbConn): Relay[T] =
   result.clients = newTable[PublicKey, RelayConnection[T]]()
   db.updateSchema()
 
-# template sendMessage*[T](conn: RelayConnection[T], msg: RelayMessage) =
-#   when LOG_COMMS:
-#     info "[" & conn.pubkey.abbr & "] <- " & $msg
-#   conn.sender.sendMessage(msg)
-
 template sendError*[T](conn: RelayConnection[T], msg: string, cmd: CommandKind, code: ErrorCode) =
   conn.sendMessage(RelayMessage(
     kind: Error,

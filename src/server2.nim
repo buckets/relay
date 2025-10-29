@@ -3,6 +3,7 @@ import std/asynchttpserver
 import std/logging
 import std/strformat
 import std/strutils
+import std/deques
 
 import nimja
 import ws
@@ -15,6 +16,13 @@ type
   NetstringSocket* = ref object
     buf: string
     socket: WebSocket
+  
+  QueuedMessage* = tuple
+    socket: NetstringSocket
+    msg: RelayMessage
+
+var relay: Relay[NetstringSocket] 
+var message_queue = initDeque[QueuedMessage]()
 
 proc newNetstringSocket*(sock: WebSocket): NetstringSocket =
   new(result)
@@ -30,34 +38,35 @@ proc receiveString*(ns: NetstringSocket): Future[string] {.async.} =
     ns.buf &= packet  
 
 proc sendString*(ns: NetstringSocket, msg: string): Future[void] {.async.} =
-  echo "ns.socket.send      ", msg.nice
   await ns.socket.send(nsencode(msg))
-  echo "ns.socket.send DONE ", msg.nice
 
 proc sendCommand*(ns: NetstringSocket, cmd: RelayCommand): Future[void] {.async.} =
-  echo "asyncCheck sendString      ", $cmd
   await ns.sendString(cmd.serialize())
-  echo "asyncCheck sendString DONE ", $cmd
 
 proc receiveCommand*(ns: NetstringSocket): Future[RelayCommand] {.async.} =
   let s = await ns.receiveString()
   return RelayCommand.deserialize(s)
 
-proc sendMessage*(conn: RelayConnection[NetstringSocket], msg: RelayMessage) =
-  echo "asyncCheck sendMessage      ", $msg
-  asyncCheck conn.sender.sendString(msg.serialize())
-  echo "asyncCheck sendMessage DONE ", $msg
-
 proc receiveMessage*(ns: NetstringSocket): Future[RelayMessage] {.async.} =
   let s = await ns.receiveString()
   return RelayMessage.deserialize(s)
 
-var relay: Relay[NetstringSocket] 
+proc sendMessage*(ns: NetstringSocket, msg: RelayMessage) {.async.} =
+  await ns.sendString(msg.serialize())
+
+proc sendMessage*(conn: RelayConnection[NetstringSocket], msg: RelayMessage) =
+  message_queue.addLast((conn.sender, msg))
+
+proc sendQueuedMessages*() {.async.} =
+  while message_queue.len > 0:
+    let (sock, msg) = message_queue.popFirst()
+    await sock.sendMessage(msg)
 
 proc handleWebsocket(req: Request) {.async, gcsafe.} =
   var ws = await newWebSocket(req)
   var ns = newNetstringSocket(ws)
   var conn = relay.initAuth(ns)
+  await sendQueuedMessages()
   while ns.socket.readyState == Open:
     let cmd = try:
       await ns.receiveCommand()
@@ -73,6 +82,7 @@ proc handleWebsocket(req: Request) {.async, gcsafe.} =
       echo "CatchableError: ", getCurrentExceptionMsg()
       break
     relay.handleCommand(conn, cmd)
+    await sendQueuedMessages()
   relay.disconnect(conn)
   await req.respond(Http200, "done")
 
@@ -90,8 +100,7 @@ proc main(database: string, port: Port, address = "127.0.0.1") =
   relay = newRelay[NetstringSocket](db)
   var server = newAsyncHttpServer()
   info &"Serving on {address}:{port.int}"
-  asyncCheck server.serve(port, cb, address = address)
-  runForever()
+  waitFor server.serve(port, cb, address = address)
 
 when isMainModule:
   import argparse
