@@ -67,3 +67,54 @@ suite "decode":
       discard nsdecode("5:apple,", maxlen=4)
     expect(NetstringError):
       discard nsdecode("200:a", maxlen=100)
+
+suite "chop":
+
+  test "basic":
+    var s = "5:apple,"
+    check nschop(s) == "apple"
+    check s == ""
+  
+  test "incomplete":
+    var s = ""
+    expect(IncompleteNetstring):
+      s = "7:bana"
+      discard nschop(s)
+    check s == "7:bana"
+    expect(IncompleteNetstring):
+      s = ""
+      discard nschop(s)
+    check s == ""
+    expect(IncompleteNetstring):
+      s = "1"
+      discard nschop(s)
+    check s == "1"
+    expect(IncompleteNetstring):
+      s = "10:"
+      discard nschop(s)
+    check s == "10:"
+    expect(IncompleteNetstring):
+      s = "10:1234567890"
+      discard nschop(s)
+    check s == "10:1234567890"
+  
+  test "2 strings":
+    var s = "5:apple,3:f\x00o,"
+    check nschop(s) == "apple"
+    check nschop(s) == "f\x00o"
+    check s == ""
+  
+  test "leftover":
+    var s = "3:foo,2:ba"
+    check nschop(s) == "foo"
+    check s == "2:ba"
+  
+  test "newline delimiter":
+    var s = "5:apple\n"
+    check nschop(s) == "apple"
+    check s == ""
+
+  test "empty string":
+    var s = "0:,"
+    check s.nschop() == ""
+    check s == ""

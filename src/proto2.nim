@@ -347,7 +347,6 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           conn.sendOkay cmd.kind
         except:
           conn.sendError("Duplicate topic", cmd.kind, Generic)
-          echo "FRANK post sendError"
   of FetchNote:
     if cmd.fetch_topic.len > RELAY_MAX_TOPIC_SIZE:
       conn.sendError("Topic too long", cmd.kind, TooLarge)
@@ -443,9 +442,6 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           chunk_key: key,
           chunk_val: none[string](),
         ))
-  echo "FRANK post case statement"
-  when LOG_COMMS:
-    info "[" & conn.pubkey.abbr & "] DONE " & $cmd
 #-------------------------------------------------------------------
 # Utilities
 #-------------------------------------------------------------------

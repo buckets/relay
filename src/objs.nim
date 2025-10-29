@@ -266,6 +266,12 @@ proc nsdecode*(x: string, maxlen = MAX_NETSTRING): string =
   var idx = 0
   return nsdecode(x, idx, maxlen = maxlen)
 
+proc nschop*(x: var string, maxlen = MAX_NETSTRING): string =
+  ## Get the first netstring from a string and return it.
+  ## Also remove the first netstring from the passed-in string
+  var idx = 0
+  result = nsdecode(x, idx, maxlen = maxlen)
+  x.delete(0..(idx-1))
 
 proc serialize*(kind: MessageKind): char =
   case kind
