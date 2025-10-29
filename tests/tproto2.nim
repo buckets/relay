@@ -36,8 +36,8 @@ proc newTestClient*(keys: KeyPair): TestClient =
   result.pk = keys.pk
   result.sk = keys.sk
 
-proc sendMessage*(c: var TestClient, msg: RelayMessage) =
-  c.received.addLast(msg)
+proc sendMessage*(conn: RelayConnection[TestClient], msg: RelayMessage) =
+  conn.sender.received.addLast(msg)
 
 proc pop*(c: var TestClient): RelayMessage =
   c.received.popFirst()

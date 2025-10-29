@@ -30,17 +30,23 @@ proc receiveString*(ns: NetstringSocket): Future[string] {.async.} =
     ns.buf &= packet  
 
 proc sendString*(ns: NetstringSocket, msg: string): Future[void] {.async.} =
-  ns.socket.send(nsencode(msg))
+  echo "ns.socket.send      ", msg.nice
+  await ns.socket.send(nsencode(msg))
+  echo "ns.socket.send DONE ", msg.nice
 
-proc sendCommand*(ns: NetstringSocket, cmd: RelayCommand) =
-  asyncCheck ns.sendString(cmd.serialize())
+proc sendCommand*(ns: NetstringSocket, cmd: RelayCommand): Future[void] {.async.} =
+  echo "asyncCheck sendString      ", $cmd
+  await ns.sendString(cmd.serialize())
+  echo "asyncCheck sendString DONE ", $cmd
 
 proc receiveCommand*(ns: NetstringSocket): Future[RelayCommand] {.async.} =
   let s = await ns.receiveString()
   return RelayCommand.deserialize(s)
 
-proc sendMessage*(ns: NetstringSocket, msg: RelayMessage) =
-  asyncCheck ns.sendString(msg.serialize())
+proc sendMessage*(conn: RelayConnection[NetstringSocket], msg: RelayMessage) =
+  echo "asyncCheck sendMessage      ", $msg
+  asyncCheck conn.sender.sendString(msg.serialize())
+  echo "asyncCheck sendMessage DONE ", $msg
 
 proc receiveMessage*(ns: NetstringSocket): Future[RelayMessage] {.async.} =
   let s = await ns.receiveString()
@@ -84,7 +90,8 @@ proc main(database: string, port: Port, address = "127.0.0.1") =
   relay = newRelay[NetstringSocket](db)
   var server = newAsyncHttpServer()
   info &"Serving on {address}:{port.int}"
-  waitFor server.serve(port, cb, address = address)
+  asyncCheck server.serve(port, cb, address = address)
+  runForever()
 
 when isMainModule:
   import argparse

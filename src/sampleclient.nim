@@ -27,13 +27,13 @@ proc authenticatedWS(url: string, keys: KeyPair): NetstringSocket =
   var ns = newNetstringSocket(ws)
   let who = waitFor ns.receiveMessage()
   let sig = keys.sk.sign(who.who_challenge)
-  ns.sendCommand(RelayCommand(kind: Iam, iam_signature: sig, iam_pubkey: keys.pk))
+  waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_signature: sig, iam_pubkey: keys.pk))
   let ok = waitFor ns.receiveMessage()
   doAssert ok.kind == Okay, $ok
   return ns
 
 proc publishNote(ns: NetstringSocket, topic: string, data: string) =
-  ns.sendCommand(RelayCommand(
+  waitFor ns.sendCommand(RelayCommand(
     kind: PublishNote,
     pub_topic: topic,
     pub_data: data,
