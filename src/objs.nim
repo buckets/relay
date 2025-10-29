@@ -64,6 +64,7 @@ type
     of Iam:
       iam_pubkey*: PublicKey
       iam_signature*: string
+      iam_credentials*: string ## For the future possibility of credentials
     of PublishNote:
       pub_topic*: string
       pub_data*: string
@@ -164,7 +165,7 @@ proc `$`*(cmd: RelayCommand): string =
   result.add $cmd.kind & "("
   case cmd.kind
   of Iam:
-    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong}"
+    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong} creds={cmd.iam_credentials.nicelong}"
   of PublishNote:
     result.add &"'{cmd.pub_topic.nice.abbr}' val={cmd.pub_data.nicelong}"
   of FetchNote:
@@ -189,7 +190,7 @@ proc `==`*(a, b: RelayCommand): bool =
   else:
     case a.kind
     of Iam:
-      return a.iam_pubkey == b.iam_pubkey and a.iam_signature == b.iam_signature
+      return a.iam_pubkey == b.iam_pubkey and a.iam_signature == b.iam_signature and a.iam_credentials == b.iam_credentials
     of PublishNote:
       return a.pub_topic == b.pub_topic and a.pub_data == b.pub_data
     of FetchNote:
@@ -409,6 +410,7 @@ proc serialize*(cmd: RelayCommand): string =
   of Iam:
     result &= cmd.iam_pubkey.string.nsencode
     result &= cmd.iam_signature.nsencode
+    result &= cmd.iam_credentials.nsencode
   of PublishNote:
     result &= cmd.pub_topic.nsencode
     result &= cmd.pub_data.nsencode
@@ -436,6 +438,7 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
       kind: Iam,
       iam_pubkey: s.nsdecode(idx).PublicKey,
       iam_signature: s.nsdecode(idx),
+      iam_credentials: s.nsdecode(idx),
     )
   of PublishNote:
     var idx = 1

@@ -1,6 +1,8 @@
 import std/unittest
+import std/logging
 import std/options
 
+import ./util
 import proto2
 
 test "MessageKind":
@@ -21,13 +23,19 @@ test "RelayMessage":
       of Data: RelayMessage(kind: Data, data_src: "hey".PublicKey, data_val: "foo")
       of Chunk: RelayMessage(kind: Chunk, chunk_src: "hey".PublicKey, chunk_key: "key", chunk_val: some("theval"))
     let serialized = example.serialize()
-    checkpoint "serialized: " & serialized
+    info $example
+    info "serialized: " & serialized
     check RelayMessage.deserialize(serialized) == example
 
 test "RelayCommand":
   for kind in low(CommandKind)..high(CommandKind):
     let example = case kind
-      of Iam: RelayCommand(kind: Iam, iam_pubkey: "hey".PublicKey, iam_signature: "foo")
+      of Iam: RelayCommand(
+        kind: Iam,
+        iam_pubkey: "hey".PublicKey,
+        iam_signature: "foo",
+        iam_credentials: "somecreds",
+      )
       of PublishNote: RelayCommand(kind: PublishNote, pub_topic: "topic", pub_data: "data")
       of FetchNote: RelayCommand(kind: FetchNote, fetch_topic: "topic")
       of SendData: RelayCommand(kind: SendData, send_dst: "one".PublicKey, send_val: "data")
@@ -39,7 +47,8 @@ test "RelayCommand":
         )
       of GetChunks: RelayCommand(kind: GetChunks, chunk_src: "hey".PublicKey, chunk_keys: @["foo", "bar"])
     let serialized = example.serialize()
-    checkpoint "serialized: " & serialized
+    info $example
+    info "serialized: " & serialized
     check RelayCommand.deserialize(serialized) == example
 
 test "Chunk with none":
@@ -48,7 +57,7 @@ test "Chunk with none":
     chunk_key: "key",
     chunk_val: none[string](),
   )
-  checkpoint $chunk
+  info $chunk
   let serialized = chunk.serialize()
-  checkpoint "serialized: " & serialized
+  info "serialized: " & serialized
   check RelayMessage.deserialize(serialized) == chunk
