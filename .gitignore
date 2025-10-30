@@ -12,3 +12,4 @@ relay.sqlite
 libs
 *.keys
 *.sqlite
+tests/bin
