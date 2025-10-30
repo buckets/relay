@@ -7,7 +7,6 @@
 ## This file should be kept free of dependencies other than the stdlib
 ## as it's meant to be referenced by outside libraries.
 
-import std/base64
 import std/hashes
 import std/options
 import std/sequtils
@@ -327,9 +326,9 @@ proc serialize*(keys: seq[PublicKey]): string =
     result &= nsencode(key.string)
 
 proc deserializePubKeys*(val: string): seq[PublicKey] =
-  var idx = 0
-  while idx < val.len:
-    result.add(val.nsdecode(idx).PublicKey)
+  var val = val
+  while val.len > 0:
+    result.add(val.nschop().PublicKey)
 
 proc serialize*(s: seq[string]): string =
   for item in s:
