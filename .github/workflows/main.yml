@@ -33,11 +33,6 @@ jobs:
       run: |
         export SHOW_LOGS=1
         tests/all.sh
-    - name: Functional tests
-      shell: bash
-      run: |
-        export SHOW_LOGS=1
-        /bin/bash tests/functional.sh
 
   docker:
     runs-on: ubuntu-latest

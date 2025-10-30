@@ -41,6 +41,8 @@ proc sendString*(ns: NetstringSocket, msg: string): Future[void] {.async.} =
   await ns.socket.send(nsencode(msg))
 
 proc sendCommand*(ns: NetstringSocket, cmd: RelayCommand): Future[void] {.async.} =
+  when LOG_COMMS:
+    info "[client] -> " & $cmd
   await ns.sendString(cmd.serialize())
 
 proc receiveCommand*(ns: NetstringSocket): Future[RelayCommand] {.async.} =
@@ -49,7 +51,10 @@ proc receiveCommand*(ns: NetstringSocket): Future[RelayCommand] {.async.} =
 
 proc receiveMessage*(ns: NetstringSocket): Future[RelayMessage] {.async.} =
   let s = await ns.receiveString()
-  return RelayMessage.deserialize(s)
+  let res = RelayMessage.deserialize(s)
+  when LOG_COMMS:
+    info "[client] <- " & $res
+  return res
 
 proc sendMessage*(ns: NetstringSocket, msg: RelayMessage) {.async.} =
   await ns.sendString(msg.serialize())
@@ -73,13 +78,13 @@ proc handleWebsocket(req: Request) {.async, gcsafe.} =
     except WebSocketClosedError:
       break
     except WebSocketProtocolMismatchError:
-      echo "Socket tried to use an unknown protocol: ", getCurrentExceptionMsg()
+      warn "Socket tried to use an unknown protocol: ", getCurrentExceptionMsg()
       break
     except WebSocketError:
-      echo "Unexpected socket error: ", getCurrentExceptionMsg()
+      warn "Unexpected socket error: ", getCurrentExceptionMsg()
       break
     except CatchableError:
-      echo "CatchableError: ", getCurrentExceptionMsg()
+      warn "CatchableError: ", getCurrentExceptionMsg()
       break
     relay.handleCommand(conn, cmd)
     await sendQueuedMessages()

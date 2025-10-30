@@ -55,8 +55,8 @@ proc pop(conn: var RelayConnection[TestClient], expected: MessageKind): RelayMes
   try:
     result = conn.sender.pop()
   except IndexDefect:
-    raise IndexDefect.newException("Error getting message of kind: " & $expected)
-  doAssert result.kind == expected
+    raise IndexDefect.newException("No message found while expecting kind: " & $expected)
+  doAssert result.kind == expected, "Expected " & $expected & " but got " & $result
 
 proc msgCount(conn: var RelayConnection[TestClient]): int =
   conn.sender.received.len
@@ -64,6 +64,11 @@ proc msgCount(conn: var RelayConnection[TestClient]): int =
 proc pk(conn: var RelayConnection[TestClient]): PublicKey = conn.sender.pk
 proc sk(conn: var RelayConnection[TestClient]): SecretKey = conn.sender.sk
 proc keys(conn: var RelayConnection[TestClient]): KeyPair = (conn.sender.pk, conn.sender.sk)
+
+proc anonConn(relay: Relay): RelayConnection[TestClient] =
+  let client = newTestClient(genkeys())
+  var conn = relay.initAuth(client)
+  return conn
 
 proc authenticatedConn(relay: Relay, keys: KeyPair): RelayConnection[TestClient] =
   let client = newTestClient(keys)
@@ -571,3 +576,73 @@ suite "store":
     let err = alice.pop(Error)
     check err.err_cmd == StoreChunk
     check err.err_code == TooLarge
+
+suite "anonymous":
+
+  test "PublishNote":
+    let relay = testRelay()
+    var alice = relay.anonConn()
+    discard alice.pop(Who)
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "foo",
+      pub_data: "bar"
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == PublishNote
+    check err.err_code == NotAllowed
+  
+  test "FetchNote":
+    let relay = testRelay()
+    var alice = relay.anonConn()
+    discard alice.pop(Who)
+    relay.handleCommand(alice, RelayCommand(
+      kind: FetchNote,
+      fetch_topic: "foo",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == FetchNote
+    check err.err_code == NotAllowed
+  
+  test "SendData":
+    let relay = testRelay()
+    var keys = genkeys()
+    var alice = relay.anonConn()
+    discard alice.pop(Who)
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      send_dst: keys.pk,
+      send_val: "bar",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == SendData
+    check err.err_code == NotAllowed
+  
+  test "StoreChunk":
+    let relay = testRelay()
+    var keys = genkeys()
+    var alice = relay.anonConn()
+    discard alice.pop(Who)
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[keys.pk],
+      chunk_key: "foo",
+      chunk_val: "bar",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == StoreChunk
+    check err.err_code == NotAllowed
+
+  test "GetChunks":
+    let relay = testRelay()
+    var keys = genkeys()
+    var alice = relay.anonConn()
+    discard alice.pop(Who)
+    relay.handleCommand(alice, RelayCommand(
+      kind: GetChunks,
+      chunk_src: keys.pk,
+      chunk_keys: @["foo"],
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == GetChunks
+    check err.err_code == NotAllowed

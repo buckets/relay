@@ -34,7 +34,6 @@ test "RelayCommand":
         kind: Iam,
         iam_pubkey: "hey".PublicKey,
         iam_signature: "foo",
-        iam_credentials: "somecreds",
       )
       of PublishNote: RelayCommand(kind: PublishNote, pub_topic: "topic", pub_data: "data")
       of FetchNote: RelayCommand(kind: FetchNote, fetch_topic: "topic")

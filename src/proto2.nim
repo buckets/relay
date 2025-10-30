@@ -16,7 +16,7 @@ import libsodium/sodium
 
 import ./objs; export objs
 
-const LOG_COMMS = not defined(release)
+const LOG_COMMS* = not defined(release)
 const TESTMODE = defined(testmode) and not defined(release)
 
 type
@@ -290,6 +290,10 @@ proc delExpiredChunks(relay: Relay) =
 proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: RelayCommand) =
   when LOG_COMMS:
     info "[" & conn.pubkey.abbr & "] DO " & $cmd
+  if conn.pubkey.string == "" and cmd.kind != Iam:
+    conn.sendError("Not allowed", cmd.kind, NotAllowed)
+    return
+
   case cmd.kind
   of Iam:
     try:

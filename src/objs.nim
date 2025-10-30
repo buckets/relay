@@ -28,7 +28,8 @@ type
 
   ErrorCode* = enum
     Generic = 0
-    TooLarge = 1
+    NotAllowed = 1
+    TooLarge = 2
 
   RelayMessage* = object
     case kind*: MessageKind
@@ -64,7 +65,6 @@ type
     of Iam:
       iam_pubkey*: PublicKey
       iam_signature*: string
-      iam_credentials*: string ## For the future possibility of credentials
     of PublishNote:
       pub_topic*: string
       pub_data*: string
@@ -165,7 +165,7 @@ proc `$`*(cmd: RelayCommand): string =
   result.add $cmd.kind & "("
   case cmd.kind
   of Iam:
-    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong} creds={cmd.iam_credentials.nicelong}"
+    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong}"
   of PublishNote:
     result.add &"'{cmd.pub_topic.nice.abbr}' val={cmd.pub_data.nicelong}"
   of FetchNote:
@@ -174,13 +174,11 @@ proc `$`*(cmd: RelayCommand): string =
     result.add &"{cmd.send_dst.nice.abbr} val={cmd.send_val.nicelong}"
   of StoreChunk:
     result.add &"{cmd.chunk_key.nice.abbr}={cmd.chunk_val.nicelong} dst=["
-    for dst in cmd.chunk_dst:
-      result.add dst.nice.abbr & ", "
+    result.add cmd.chunk_dst.mapIt(it.nice.abbr).join(", ")
     result.add "]"
   of GetChunks:
     result.add &"{cmd.chunk_src.nice.abbr} keys=["
-    for key in cmd.chunk_keys:
-      result.add key.nice.abbr & ", "
+    result.add cmd.chunk_keys.mapIt(it.nice.abbr).join(", ")
     result.add "]"
   result.add ")"
 
@@ -190,7 +188,7 @@ proc `==`*(a, b: RelayCommand): bool =
   else:
     case a.kind
     of Iam:
-      return a.iam_pubkey == b.iam_pubkey and a.iam_signature == b.iam_signature and a.iam_credentials == b.iam_credentials
+      return a.iam_pubkey == b.iam_pubkey and a.iam_signature == b.iam_signature
     of PublishNote:
       return a.pub_topic == b.pub_topic and a.pub_data == b.pub_data
     of FetchNote:
@@ -314,12 +312,14 @@ proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
 proc serialize*(err: ErrorCode): char =
   case err
   of Generic: '0'
-  of TooLarge: '1'
+  of NotAllowed: '1'
+  of TooLarge: '2'
 
 proc deserialize*(typ: typedesc[ErrorCode], ch: char): ErrorCode =
   case ch
   of '0': Generic
-  of '1': TooLarge
+  of '1': NotAllowed
+  of '2': TooLarge
   else: raise ValueError.newException("Unknown ErrorCode: " & ch)
 
 proc serialize*(keys: seq[PublicKey]): string =
@@ -419,7 +419,6 @@ proc serialize*(cmd: RelayCommand): string =
   of Iam:
     result &= cmd.iam_pubkey.string.nsencode
     result &= cmd.iam_signature.nsencode
-    result &= cmd.iam_credentials.nsencode
   of PublishNote:
     result &= cmd.pub_topic.nsencode
     result &= cmd.pub_data.nsencode
@@ -447,7 +446,6 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
       kind: Iam,
       iam_pubkey: s.nsdecode(idx).PublicKey,
       iam_signature: s.nsdecode(idx),
-      iam_credentials: s.nsdecode(idx),
     )
   of PublishNote:
     var idx = 1
