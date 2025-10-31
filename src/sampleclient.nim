@@ -16,8 +16,8 @@ proc newWS*(url: string): NetstringSocket =
 proc newRelayClient*(url: string, keys: KeyPair): NetstringSocket =
   var ns = newWS(url)
   let who = waitFor ns.receiveMessage()
-  let sig = keys.sk.sign(who.who_challenge)
-  waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_signature: sig, iam_pubkey: keys.pk))
+  let answer = who.who_challenge.answer(keys.sk)
+  waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: keys.pk))
   let ok = waitFor ns.receiveMessage()
   doAssert ok.kind == Okay, $ok
   return ns

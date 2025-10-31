@@ -17,6 +17,17 @@ type
   PublicKey* = distinct string
   SecretKey* = distinct string
 
+  Challenge* = tuple
+    bits: int
+    rand: string
+    opslimit: int
+    memlimit: int
+  
+  ChallengeAnswer* = tuple
+    nonce: int
+    output: string
+    signature: string
+
   MessageKind* = enum
     Who
     Okay
@@ -33,7 +44,7 @@ type
   RelayMessage* = object
     case kind*: MessageKind
     of Who:
-      who_challenge*: string
+      who_challenge*: Challenge
     of Okay:
       ok_cmd*: CommandKind
     of Error:
@@ -63,7 +74,7 @@ type
     case kind*: CommandKind
     of Iam:
       iam_pubkey*: PublicKey
-      iam_signature*: string
+      iam_answer*: ChallengeAnswer
     of PublishNote:
       pub_topic*: string
       pub_data*: string
@@ -125,11 +136,17 @@ proc `==`*(a,b: PublicKey): bool {.borrow.}
 
 proc abbr*(a: PublicKey): string = abbr(a.nice)
 
+proc `$`*(ch: Challenge): string =
+  result = &"({ch.bits} {ch.opslimit} {ch.memlimit} rand={ch.rand.nice})"
+
+proc `$`*(ans: ChallengeAnswer): string =
+  result = &"({ans.nonce} {ans.output} {ans.signature.nicelong})"
+
 proc `$`*(msg: RelayMessage): string =
   result.add $msg.kind & "("
   case msg.kind
   of Who:
-    result.add "challenge=" & msg.who_challenge.nicelong
+    result.add "challenge=" & $msg.who_challenge
   of Okay:
     result.add &"cmd={msg.ok_cmd}"
   of Error:
@@ -164,7 +181,7 @@ proc `$`*(cmd: RelayCommand): string =
   result.add $cmd.kind & "("
   case cmd.kind
   of Iam:
-    result.add &"{cmd.iam_pubkey.nice.abbr} sig={cmd.iam_signature.nicelong}"
+    result.add &"{cmd.iam_pubkey.nice.abbr} {cmd.iam_answer}"
   of PublishNote:
     result.add &"'{cmd.pub_topic.nice.abbr}' val={cmd.pub_data.nicelong}"
   of FetchNote:
@@ -187,7 +204,7 @@ proc `==`*(a, b: RelayCommand): bool =
   else:
     case a.kind
     of Iam:
-      return a.iam_pubkey == b.iam_pubkey and a.iam_signature == b.iam_signature
+      return a.iam_pubkey == b.iam_pubkey and a.iam_answer == b.iam_answer
     of PublishNote:
       return a.pub_topic == b.pub_topic and a.pub_data == b.pub_data
     of FetchNote:
@@ -309,17 +326,40 @@ proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   else: raise ValueError.newException("Unknown CommandKind: " & val)
 
 proc serialize*(err: ErrorCode): char =
-  case err
-  of Generic: '0'
-  of NotAllowed: '1'
-  of TooLarge: '2'
+  chr(err.ord)
 
 proc deserialize*(typ: typedesc[ErrorCode], ch: char): ErrorCode =
-  case ch
-  of '0': Generic
-  of '1': NotAllowed
-  of '2': TooLarge
-  else: raise ValueError.newException("Unknown ErrorCode: " & ch)
+  try:
+    ErrorCode(ord(ch))
+  except:
+    raise ValueError.newException("Unknown ErrorCode: " & ch)
+
+proc serialize*(chal: Challenge): string =
+  result.add nsencode($chal.bits)
+  result.add nsencode(chal.rand)
+  result.add nsencode($chal.opslimit)
+  result.add nsencode($chal.memlimit)
+
+proc deserialize*(typ: typedesc[Challenge], val: string): Challenge =
+  var idx = 0
+  let bits = val.nsdecode(idx).parseInt()
+  let rand = val.nsdecode(idx)
+  let opslimit = val.nsdecode(idx).parseInt()
+  let memlimit = val.nsdecode(idx).parseInt()
+  return (bits, rand, opslimit, memlimit)
+
+proc serialize*(ans: ChallengeAnswer): string =
+  result &= nsencode($ans.nonce)
+  result &= nsencode(ans.output)
+  result &= nsencode(ans.signature)
+
+proc deserialize*(typ: typedesc[ChallengeAnswer], val: string): ChallengeAnswer =
+  var idx = 0
+  return (
+    nonce: val.nsdecode(idx).parseInt(),
+    output: val.nsdecode(idx),
+    signature: val.nsdecode(idx),
+  )
 
 proc serialize*(keys: seq[PublicKey]): string =
   for key in keys:
@@ -343,7 +383,7 @@ proc serialize*(msg: RelayMessage): string =
   result &= msg.kind.serialize()
   case msg.kind
   of Who:
-    result &= msg.who_challenge
+    result &= msg.who_challenge.serialize()
   of Okay:
     result &= msg.ok_cmd.serialize()
   of Error:
@@ -369,7 +409,7 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
   let kind = MessageKind.deserialize(s[0])
   case kind
   of Who:
-    return RelayMessage(kind: Who, who_challenge: s[1..^1])
+    return RelayMessage(kind: Who, who_challenge: Challenge.deserialize(s[1..^1]))
   of Okay:
     return RelayMessage(kind: Okay, ok_cmd: CommandKind.deserialize(s[1]))
   of Error:
@@ -417,7 +457,7 @@ proc serialize*(cmd: RelayCommand): string =
   case cmd.kind
   of Iam:
     result &= cmd.iam_pubkey.string.nsencode
-    result &= cmd.iam_signature.nsencode
+    result &= cmd.iam_answer.serialize().nsencode
   of PublishNote:
     result &= cmd.pub_topic.nsencode
     result &= cmd.pub_data.nsencode
@@ -444,7 +484,7 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
     return RelayCommand(
       kind: Iam,
       iam_pubkey: s.nsdecode(idx).PublicKey,
-      iam_signature: s.nsdecode(idx),
+      iam_answer: ChallengeAnswer.deserialize(s.nsdecode(idx)),
     )
   of PublishNote:
     var idx = 1

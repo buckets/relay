@@ -13,6 +13,7 @@ import std/times
 
 import lowdb/sqlite
 import libsodium/sodium
+import libsodium/sodium_sizes
 
 import ./objs; export objs
 
@@ -31,7 +32,7 @@ type
   RelayConnection*[T] = ref object
     sender*: T
     pubkey*: PublicKey ## The authenticated pubkey
-    challenge: string
+    challenge: Option[Challenge]
     relay*: Relay[T]
 
 when TESTMODE:
@@ -42,6 +43,90 @@ when TESTMODE:
     TIME_SKEW += dur.inSeconds()
   proc resetSkew*() =
     TIME_SKEW = 0
+
+#-------------------------------------------------------------------
+# Utilities
+#-------------------------------------------------------------------
+proc genkeys*(): KeyPair =
+  let (pk, sk) = crypto_sign_keypair()
+  result = (pk.PublicKey, sk.SecretKey)
+
+proc sign*(key: SecretKey, message: string): string =
+  ## Sign a message with the given secret key
+  result = crypto_sign_detached(key.string, message)
+
+proc is_valid_signature*(key: PublicKey, plaintext: string, signature: string): bool =
+  try:
+    crypto_sign_verify_detached(key.string, plaintext, signature)
+    return true
+  except SodiumError:
+    return false
+  except CatchableError:
+    return false
+
+const
+  CHALLENGE_BITS = when TESTMODE: 1 else: 5
+
+proc generateChallenge*(bits = CHALLENGE_BITS, opslimit = crypto_pwhash_opslimit_interactive().int, memlimit = crypto_pwhash_memlimit_interactive().int): Challenge =
+  return (
+    bits: bits,
+    rand: randombytes(32),
+    opslimit: opslimit,
+    memlimit: memlimit,
+  )
+
+proc sigContents*(ch: Challenge, nonce: int, output: string): string =
+  ch.serialize & nsencode($nonce) & output
+
+proc firstBits(s: string, n: int): string =
+  ## Returns the first `n` bits of the string `s` as a binary string.
+  if s.len * 8 < n:
+    raise ValueError.newException("String not long enough")
+  var bitsLeft = n
+  for i in 0..<min(s.len, (n + 7) div 8):
+    var byte = ord(s[i]).uint8
+    for bit in countdown(7, 0):
+      if bitsLeft > 0:
+        result.add(if (byte and (1'u8 shl bit)) != 0: '1' else: '0')
+        dec bitsLeft
+      else:
+        return result
+  if bitsLeft > 0:
+    # this should never happen, but just in case
+    raise ValueError.newException("String not long enough")
+  return result
+
+proc answer*(ch: Challenge, sk: SecretKey): ChallengeAnswer =
+  ## Answer a hashcash challenge and sign the result
+  var nonce = 0
+  let serialized = ch.serialize()
+  var start = getTime()
+  var expected_prefix = '0'.repeat(ch.bits)
+  while true:
+    let inp = serialized & ":" & $nonce
+    let output = crypto_pwhash_str(inp,
+      opslimit = ch.opslimit.csize_t,
+      memlimit = ch.memlimit.csize_t)
+    let hashpart = base64.decode(output.split('$')[^1])
+    let bits = hashpart.firstBits(ch.bits)
+    if bits == expected_prefix:
+      var diff = getTime() - start
+      return (
+        nonce: nonce,
+        output: output,
+        signature: sk.sign(sigContents(ch, nonce, output)),
+      )
+    nonce.inc()
+
+proc is_valid_answer*(pk: PublicKey, ch: Challenge, answer: ChallengeAnswer): bool =
+  ## Verify the signed challenge answer
+  if not pk.is_valid_signature(sigContents(ch, answer.nonce, answer.output), answer.signature):
+    return false
+  let inp = ch.serialize() & ":" & $answer.nonce
+  if crypto_pwhash_str_verify(answer.output, inp) == false:
+    return false
+  return true
+
 
 #-------------------------------------------------------------------
 # Database
@@ -146,8 +231,8 @@ proc `$`*[T](conn: RelayConnection[T]): string =
   result = "RelayConnectiong("
   result &= &"pubkey={conn.pubkey.abbr} "
   result &= &"sender={conn.sender}"
-  if conn.challenge != "":
-    result &= " cha=" & base64.encode(conn.challenge)
+  if conn.challenge.isSome:
+    result &= " cha=" & base64.encode(conn.challenge.get())
   result &= ")"
 
 proc `$`*[T](tab: TableRef[PublicKey, RelayConnection[T]]): string =
@@ -181,10 +266,10 @@ template sendOkay*[T](conn: RelayConnection[T], cmd: CommandKind) =
 proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
   new(result)
   result.sender = client
-  result.challenge = randombytes(32)
+  result.challenge = some(generateChallenge())
   result.sendMessage(RelayMessage(
     kind: Who,
-    who_challenge: result.challenge,
+    who_challenge: result.challenge.get(),
   ))
   result.relay = relay
 
@@ -296,18 +381,23 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
 
   case cmd.kind
   of Iam:
+    if conn.challenge.isNone:
+      conn.sendError("Already authenticated", cmd.kind, Generic)
+      return
+    let challenge = conn.challenge.get()
+    conn.challenge = none[Challenge]() # disable future authentication attempts
+    
     try:
-      crypto_sign_verify_detached(cmd.iam_pubkey.string, conn.challenge, cmd.iam_signature)
-    except SodiumError:
-      conn.sendError("Invalid signature", cmd.kind, Generic)
-      return
+      if not is_valid_answer(cmd.iam_pubkey, challenge, cmd.iam_answer):
+        conn.sendError("Invalid answer", cmd.kind, Generic)
+        return
     except CatchableError:
-      conn.sendError("Error validating signature", cmd.kind, Generic)
+      conn.sendError("Invalid answer", cmd.kind, Generic)
       return
+
     # successful connection
     conn.pubkey = cmd.iam_pubkey
     relay.clients[conn.pubkey] = conn
-    conn.challenge = "" # disable authentication
     info &"[{conn.pubkey.abbr}] connected"
     conn.sendOkay cmd.kind
 
@@ -441,13 +531,3 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           chunk_key: key,
           chunk_val: none[string](),
         ))
-#-------------------------------------------------------------------
-# Utilities
-#-------------------------------------------------------------------
-proc genkeys*(): KeyPair =
-  let (pk, sk) = crypto_sign_keypair()
-  result = (pk.PublicKey, sk.SecretKey)
-
-proc sign*(key: SecretKey, message: string): string =
-  ## Sign a message with the given secret key
-  result = crypto_sign_detached(key.string, message)

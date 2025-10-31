@@ -37,6 +37,8 @@ proc newTestClient*(keys: KeyPair): TestClient =
   result.sk = keys.sk
 
 proc sendMessage*(conn: RelayConnection[TestClient], msg: RelayMessage) =
+  when LOG_COMMS:
+    info "[" & conn.pubkey.abbr & "] <- " & $msg
   conn.sender.received.addLast(msg)
 
 proc pop*(c: var TestClient): RelayMessage =
@@ -75,8 +77,13 @@ proc authenticatedConn(relay: Relay, keys: KeyPair): RelayConnection[TestClient]
   var conn = relay.initAuth(client)
   let who = conn.pop()
   doAssert who.kind == Who
-  let sig = client.sk.sign(who.who_challenge)
-  relay.handleCommand(conn, RelayCommand(kind: Iam, iam_signature: sig, iam_pubkey: client.pk))
+  let answer = who.who_challenge.answer(client.sk)
+  echo "answer: ", $answer
+  relay.handleCommand(conn, RelayCommand(
+    kind: Iam,
+    iam_answer: answer,
+    iam_pubkey: client.pk
+  ))
   let ok = conn.pop()
   doAssert ok.kind == Okay
   doAssert ok.ok_cmd == Iam
@@ -97,12 +104,12 @@ suite "Auth":
     checkpoint "who?"
     var alice = relay.initAuth(aclient)
     let who = alice.pop(Who)
-    check who.who_challenge != ""
+    check who.who_challenge != default(Challenge)
     checkpoint $who
 
     checkpoint "iam"
-    let signature = aclient.sk.sign(who.who_challenge)
-    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_signature: signature, iam_pubkey: aclient.pk))
+    let answer = who.who_challenge.answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
     discard alice.pop(Okay)
 
   test "iam twice":
@@ -112,25 +119,71 @@ suite "Auth":
     checkpoint "who?"
     var alice = relay.initAuth(aclient)
     let who = alice.pop(Who)
-    check who.who_challenge != ""
+    check who.who_challenge != default(Challenge)
 
     checkpoint "iam"
-    let signature = aclient.sk.sign(who.who_challenge)
-    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_signature: signature, iam_pubkey: aclient.pk))
+    let answer = who.who_challenge.answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
     discard alice.pop(Okay)
 
-    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_signature: signature, iam_pubkey: aclient.pk))
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
     check alice.pop().kind == Error
 
-  test "iam invalid sig":
+  test "iam invalid answer":
+    let relay = testRelay()
+    let aclient = newTestClient(genkeys())
+    var alice = relay.initAuth(aclient)
+    let who = alice.pop(Who)
+
+    let answer = generateChallenge().answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
+    let err = alice.pop(Error)
+    check err.err_cmd == Iam
+  
+  test "iam invalid signature":
+    let relay = testRelay()
+    let aclient = newTestClient(genkeys())
+    var alice = relay.initAuth(aclient)
+    let who = alice.pop(Who)
+
+    var bobkeys = genkeys()
+    let answer = generateChallenge().answer(bobkeys.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
+    let err = alice.pop(Error)
+    check err.err_cmd == Iam
+  
+  test "invalid opslimit":
+    let relay = testRelay()
+    let aclient = newTestClient(genkeys())
+    var alice = relay.initAuth(aclient)
+    let who = alice.pop(Who)
+
+    let answer = generateChallenge(opslimit = who.who_challenge.opslimit - 1).answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
+    let err = alice.pop(Error)
+    check err.err_cmd == Iam
+
+  test "invalid memlimit":
     let relay = testRelay()
     let aclient = newTestClient(genkeys())
     
     var alice = relay.initAuth(aclient)
     let who = alice.pop(Who)
 
-    let signature = aclient.sk.sign(who.who_challenge & "garbage")
-    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_signature: signature, iam_pubkey: aclient.pk))
+    let answer = generateChallenge(memlimit = who.who_challenge.memlimit - 32).answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
+    let err = alice.pop(Error)
+    check err.err_cmd == Iam
+  
+  test "invalid bits":
+    let relay = testRelay()
+    let aclient = newTestClient(genkeys())
+    
+    var alice = relay.initAuth(aclient)
+    let who = alice.pop(Who)
+
+    let answer = generateChallenge(bits = who.who_challenge.bits - 1).answer(aclient.sk)
+    relay.handleCommand(alice, RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: aclient.pk))
     let err = alice.pop(Error)
     check err.err_cmd == Iam
 
@@ -237,23 +290,24 @@ suite "PublishNote":
     check err.err_code == TooLarge
     check err.err_cmd == PublishNote
 
-  test "expiration":
-    let relay = testRelay()
-    var alice = relay.authenticatedConn()
-    relay.handleCommand(alice, RelayCommand(
-      kind: PublishNote,
-      pub_topic: "topic",
-      pub_data: "a",
-    ))
-    check alice.pop(Okay).ok_cmd == PublishNote
+  when not defined(release):
+    test "expiration":
+      let relay = testRelay()
+      var alice = relay.authenticatedConn()
+      relay.handleCommand(alice, RelayCommand(
+        kind: PublishNote,
+        pub_topic: "topic",
+        pub_data: "a",
+      ))
+      check alice.pop(Okay).ok_cmd == PublishNote
 
-    skewTime(RELAY_NOTE_DURATION)
-    skewTime(1)
-    relay.handleCommand(alice, RelayCommand(
-      kind: FetchNote,
-      fetch_topic: "topic",
-    ))
-    check alice.msgCount == 0
+      skewTime(RELAY_NOTE_DURATION)
+      skewTime(1)
+      relay.handleCommand(alice, RelayCommand(
+        kind: FetchNote,
+        fetch_topic: "topic",
+      ))
+      check alice.msgCount == 0
 
   test "fetch note again":
     let relay = testRelay()
@@ -375,21 +429,22 @@ suite "data":
     check err.err_code == TooLarge
     check err.err_cmd == SendData
 
-  test "expiration":
-    let relay = testRelay()
-    var alice = relay.authenticatedConn()
-    var bob = relay.authenticatedConn()
-    relay.disconnect(bob)
+  when not defined(release):
+    test "expiration":
+      let relay = testRelay()
+      var alice = relay.authenticatedConn()
+      var bob = relay.authenticatedConn()
+      relay.disconnect(bob)
 
-    relay.handleCommand(alice, RelayCommand(
-      kind: SendData,
-      send_dst: bob.pk,
-      send_val: "hello",
-    ))
+      relay.handleCommand(alice, RelayCommand(
+        kind: SendData,
+        send_dst: bob.pk,
+        send_val: "hello",
+      ))
 
-    skewTime(RELAY_MESSAGE_DURATION + 1)
-    var bob2 = relay.authenticatedConn(bob.keys)
-    check bob2.msgCount == 0
+      skewTime(RELAY_MESSAGE_DURATION + 1)
+      var bob2 = relay.authenticatedConn(bob.keys)
+      check bob2.msgCount == 0
 
 
 proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[PublicKey]()) =
@@ -494,21 +549,23 @@ suite "store":
     alice.storeChunk("key", "first")
     check bob.getChunk(alice, "key").isNone()
 
-  test "expiration":
-    let relay = testRelay()
-    var alice = relay.authenticatedConn()
-    alice.storeChunk("key", "foo")
-    skewTime(RELAY_MESSAGE_DURATION + 1)
-    check alice.getChunk(alice, "key").isNone()
+  when not defined(release):
+    test "expiration":
+      let relay = testRelay()
+      var alice = relay.authenticatedConn()
+      alice.storeChunk("key", "foo")
+      skewTime(RELAY_MESSAGE_DURATION + 1)
+      check alice.getChunk(alice, "key").isNone()
   
-  test "expiration update":
-    let relay = testRelay()
-    var alice = relay.authenticatedConn()
-    alice.storeChunk("key", "foo")
-    skewTime(RELAY_MESSAGE_DURATION - 1)
-    alice.storeChunk("key", "foo")
-    skewTime(3)
-    check alice.getChunk(alice, "key").get() == "foo"
+  when not defined(release):
+    test "expiration update":
+      let relay = testRelay()
+      var alice = relay.authenticatedConn()
+      alice.storeChunk("key", "foo")
+      skewTime(RELAY_MESSAGE_DURATION - 1)
+      alice.storeChunk("key", "foo")
+      skewTime(3)
+      check alice.getChunk(alice, "key").get() == "foo"
   
   test "remove dst":
     let relay = testRelay()

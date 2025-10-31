@@ -55,7 +55,7 @@ Clients send the following commands:
 
 | Command        | Description |
 |----------------|-------------|
-| `Iam`          | In response to a `Who` event, proves that this client has the private key |
+| `Iam`          | In response to a `Who` event, proves that this client has the private key and does some spam mitigation |
 | `PublishNote`  | Send a few bytes to another client addressed by topic (good for key exchange) |
 | `FetchNote`    | Request a note addressed by topic |
 | `SendData`     | Store/forward bytes to other clients, addressed by relay-authenticated public keys |
@@ -71,7 +71,7 @@ The relay server sends the following events:
 |-----------------|------------------------------------|
 | `Okay`          | Sent when certain commands succeed |
 | `Error`         | Sent when commands fail |
-| `Who`           | Challenge for authenticating a client's public/private keys |
+| `Who`           | Challenge for authenticating a client's public/private keys and spam mitigation |
 | `Note`          | Data payload of a note requested by `FetchNote` |
 | `Data`          | Data payload from another client, addressed by relay-authenticated public key |
 | `Chunk`         | Data payload response to `GetChunk` request |
@@ -81,7 +81,7 @@ The relay server sends the following events:
 Authentication happens like this:
 
 1. On connection, server sends `Who(challenge=ABCD...)`
-2. Client responds with `Iam(pubkey=MYPK..., signature=SIGN...)`
+2. Client responds with a signed PoW hash `Iam(pubkey=MYPK..., signature=SIGN...)`
 3. If the signature is correct, server sends `Okay(cmd=Iam)`
 
 ```

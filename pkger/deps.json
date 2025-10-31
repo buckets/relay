@@ -1,14 +1,5 @@
 {
   "pinned": {
-    "libsodium": {
-      "pkgname": "libsodium",
-      "parent": "",
-      "src": {
-        "url": "https://github.com/FedericoCeratto/nim-libsodium",
-        "kind": "git"
-      },
-      "sha": "0258efe4e7f48e22daedf26f70e3efbe830abfb5"
-    },
     "lowdb": {
       "pkgname": "lowdb",
       "parent": "",
@@ -53,6 +44,15 @@
         "kind": "git"
       },
       "sha": "98c7c99bfbcaae750ac515a6fd603f85ed68668f"
+    },
+    "libsodium": {
+      "pkgname": "libsodium",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/iffy/nim-libsodium",
+        "kind": "git"
+      },
+      "sha": "d3a116e1047b6b1363dfee08876a8f1c1bb1a128"
     }
   }
 }

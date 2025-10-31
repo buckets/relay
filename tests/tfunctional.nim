@@ -27,7 +27,7 @@ proc startServer(port: Port): Process =
   echo execProcess("nim",
     workingDir = currentSourcePath().parentDir().parentDir(),
     args = [
-      "c", "-o:" & bin, "src"/"server2.nim",
+      "c", "-d:testmode", "-o:" & bin, "src"/"server2.nim",
     ],
     options = {poStdErrToStdOut, poUsePath}
   )
@@ -158,8 +158,8 @@ suite "invalid":
     let ws = waitFor newWebSocket(serverURL())
     let ns = newNetstringSocket(ws)
     let who = waitFor ns.receiveMessage()
-    let sig = keys.sk.sign(who.who_challenge)
-    waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_signature: sig, iam_pubkey: keys.pk))
+    let answer = who.who_challenge.answer(keys.sk)
+    waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: keys.pk))
     let ok = waitFor ns.receiveMessage()
     checkpoint $ok
     check ok.kind == Okay

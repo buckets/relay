@@ -4,6 +4,7 @@ import std/options
 
 import ./util
 import proto2
+import objs
 
 test "MessageKind":
   for kind in low(MessageKind)..high(MessageKind):
@@ -16,7 +17,7 @@ test "CommandKind":
 test "RelayMessage":
   for kind in low(MessageKind)..high(MessageKind):
     let example = case kind
-      of Who: RelayMessage(kind: Who, who_challenge: "test")
+      of Who: RelayMessage(kind: Who, who_challenge: generateChallenge())
       of Okay: RelayMessage(kind: Okay, ok_cmd: SendData)
       of Error: RelayMessage(kind: Error, err_cmd: SendData, err_code: TooLarge, err_message: "foo")
       of Note: RelayMessage(kind: Note, note_topic: "something", note_data: "data")
@@ -24,7 +25,7 @@ test "RelayMessage":
       of Chunk: RelayMessage(kind: Chunk, chunk_src: "hey".PublicKey, chunk_key: "key", chunk_val: some("theval"))
     let serialized = example.serialize()
     info $example
-    info "serialized: " & serialized
+    info "serialized: " & serialized.nice
     check RelayMessage.deserialize(serialized) == example
 
 test "RelayCommand":
@@ -33,7 +34,11 @@ test "RelayCommand":
       of Iam: RelayCommand(
         kind: Iam,
         iam_pubkey: "hey".PublicKey,
-        iam_signature: "foo",
+        iam_answer: (
+          nonce: 1,
+          output: "foo",
+          signature: "hey",
+        ),
       )
       of PublishNote: RelayCommand(kind: PublishNote, pub_topic: "topic", pub_data: "data")
       of FetchNote: RelayCommand(kind: FetchNote, fetch_topic: "topic")
@@ -60,3 +65,9 @@ test "Chunk with none":
   let serialized = chunk.serialize()
   info "serialized: " & serialized
   check RelayMessage.deserialize(serialized) == chunk
+
+test "ErrorCodes":
+  for err in low(ErrorCode)..high(ErrorCode):
+    let serialized = err.serialize()
+    checkpoint "serialized.nice: " & nice($serialized)
+    check ErrorCode.deserialize(serialized) == err
