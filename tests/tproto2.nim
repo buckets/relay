@@ -78,7 +78,6 @@ proc authenticatedConn(relay: Relay, keys: KeyPair): RelayConnection[TestClient]
   let who = conn.pop()
   doAssert who.kind == Who
   let answer = who.who_challenge.answer(client.sk)
-  echo "answer: ", $answer
   relay.handleCommand(conn, RelayCommand(
     kind: Iam,
     iam_answer: answer,

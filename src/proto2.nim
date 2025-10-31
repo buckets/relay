@@ -70,7 +70,7 @@ const
 proc generateChallenge*(bits = CHALLENGE_BITS, opslimit = crypto_pwhash_opslimit_interactive().int, memlimit = crypto_pwhash_memlimit_interactive().int): Challenge =
   return (
     bits: bits,
-    rand: randombytes(32),
+    rand: randombytes(32) & $epochTime(),
     opslimit: opslimit,
     memlimit: memlimit,
   )
