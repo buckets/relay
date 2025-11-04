@@ -77,6 +77,10 @@ proc testClient(keys: KeyPair): NetstringClient =
 proc testClient(): NetstringClient =
   testClient(genkeys())
 
+suite "auth":
+
+  test "same key auth":
+    check false
 
 suite "publishnote":
 
