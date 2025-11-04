@@ -1,5 +1,5 @@
 # -- Stage 1 -- #
-FROM nimlang/nim:2.2.4-alpine-regular as builder
+FROM nimlang/nim:2.2.6-alpine-regular as builder
 WORKDIR /app
 RUN apk update && apk add libsodium-static libsodium musl-dev
 RUN nimble refresh
