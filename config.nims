@@ -1,6 +1,7 @@
 # See LICENSE.md for licensing
 switch("gc", "orc")
 switch("threads", "off")
+switch("d", "useStdLib") # rather than httpBeast
 
 import os
 const ROOT = currentSourcePath.parentDir()

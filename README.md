@@ -61,6 +61,7 @@ Clients send the following commands:
 | `SendData`     | Store/forward bytes to other clients, addressed by relay-authenticated public keys |
 | `StoreChunk`   | Store bytes for other clients to fetch addressed by key and public key. |
 | `GetChunk`     | Request stored chunk |
+| `ChunksPresent` | Ask which chunks exist |
 
 
 ### Server Events
@@ -75,6 +76,7 @@ The relay server sends the following events:
 | `Note`          | Data payload of a note requested by `FetchNote` |
 | `Data`          | Data payload from another client, addressed by relay-authenticated public key |
 | `Chunk`         | Data payload response to `GetChunk` request |
+| `ChunkStatus`   | Response to `ChunksPresent` indicating which chunks exist/don't |
 
 ### Authentication
 

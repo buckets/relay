@@ -28,12 +28,15 @@ type
   Relay*[T] = object
     db*: DbConn
     clients: TableRef[PublicKey, RelayConnection[T]]
+    max_chunk_space*: int
+    max_transfer_rate*: int
   
   RelayConnection*[T] = ref object
     sender*: T
-    pubkey*: PublicKey ## The authenticated pubkey
+    pubkey*: Option[PublicKey] ## The authenticated pubkey
     challenge: Option[Challenge]
     relay*: Relay[T]
+    ip*: string
 
 when TESTMODE:
   var TIME_SKEW = 0
@@ -183,9 +186,11 @@ proc updateSchema*(db: DbConn) =
     db.exec(sql"""CREATE TABLE note (
       topic TEXT PRIMARY KEY,
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      src TEXT NOT NULL,
       data BLOB DEFAULT ''
     )""")
     db.exec(sql"CREATE INDEX note_created ON note(created)")
+    db.exec(sql"CREATE INDEX note_src ON note(src)")
     
     # message
     db.exec(sql"""CREATE TABLE message (
@@ -213,6 +218,16 @@ proc updateSchema*(db: DbConn) =
       dst TEXT NOT NULL,
       PRIMARY KEY (src, key, dst),
       FOREIGN KEY (src, key) REFERENCES chunk(src, key) ON DELETE CASCADE
+    )""")
+
+    # stats
+    db.exec(sql"""CREATE TABLE stats_transfer (
+      period TEXT NOT NULL DEFAULT(strftime('%Y-%W')),
+      ip TEXT NOT NULL,
+      pubkey TEXT NOT NULL,
+      data_in INTEGER DEFAULT 0,
+      data_out INTEGER DEFAULT 0,
+      PRIMARY KEY (period, ip, pubkey)
     )""")
   
   #----------- in-memory stuff
@@ -274,9 +289,82 @@ proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
   result.relay = relay
 
 proc disconnect*[T](relay: Relay[T], conn: RelayConnection[T]) =
-  relay.db.exec(sql"DELETE FROM note_sub WHERE pubkey=?", conn.pubkey)
-  relay.clients.del(conn.pubkey)
+  if conn.pubkey.isSome:
+    let pubkey = conn.pubkey.get()
+    relay.db.exec(sql"DELETE FROM note_sub WHERE pubkey=?", pubkey)
+    relay.clients.del(pubkey)
   info &"[{conn.pubkey.abbr}] disconnected"
+
+#-------------------------------------------------------------------
+# stats
+#-------------------------------------------------------------------
+type
+  TransferTotal* = tuple
+    data_in: int
+    data_out: int
+    ip: string
+    pubkey: PublicKey
+    period: string
+  
+  PeriodRange* = tuple
+    a: string
+    b: string
+
+proc record_transfer_stat*(db: DbConn, ip: string, pubkey = "".PublicKey, data_in = 0, data_out = 0) =
+  db.exec(sql"""
+  INSERT INTO stats_transfer (ip, pubkey, data_in, data_out)
+  VALUES (?, ?, ?, ?)
+  ON CONFLICT(period, ip, pubkey) DO UPDATE SET
+    data_in = data_in + excluded.data_in,
+    data_out = data_out + excluded.data_out;
+  """, ip, pubkey, data_in, data_out)
+
+when TESTMODE:
+  proc record_transfer_stat_period*(db: DbConn, ip: string, pubkey = "".PublicKey, period = "", data_in = 0, data_out = 0) =
+    db.exec(sql"""
+    INSERT INTO stats_transfer (ip, pubkey, period, data_in, data_out)
+    VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT(period, ip, pubkey) DO UPDATE SET
+      data_in = data_in + excluded.data_in,
+      data_out = data_out + excluded.data_out;
+    """, ip, pubkey, period, data_in, data_out)
+
+proc chunk_space_used*(db: DbConn, pubkey: PublicKey): int =
+  ## Return the amount of space being used by the given public key
+  db.getRow(sql"""
+    SELECT coalesce(sum(length(val)), 0) FROM chunk WHERE src = ?
+  """, pubkey).get()[0].i.int
+
+proc current_data_in*(db: DbConn, pubkey: PublicKey): int =
+  ## Return the amount of data that has been transferred in by the given
+  ## public key for the current time period
+  db.getRow(sql"""
+    SELECT coalesce(sum(data_in), 0) FROM stats_transfer
+    WHERE
+      pubkey = ?
+      AND period = strftime('%Y-%W')
+  """, pubkey).get()[0].i.int
+
+proc stats_transfer_total*(db: DbConn, ip = "", pubkey = "".PublicKey, period = ""): TransferTotal =
+  var query = "SELECT sum(data_in), sum(data_out) FROM stats_transfer"
+  var whereparts: seq[string]
+  var params: seq[DbValue]
+  var groupby: seq[string]
+  if period != "":
+    whereparts.add "period=?"
+    params.add(period.dbValue())
+  if ip != "":
+    whereparts.add "ip=?"
+    params.add(ip.dbValue())
+  if pubkey.string != "":
+    whereparts.add "pubkey=?"
+    params.add(pubkey.dbValue())
+  if whereparts.len > 0:
+    query &= " WHERE " & whereparts.join(" AND ")
+  let orow = db.getRow(sql(query), params)
+  if orow.isSome():
+    let row = orow.get()
+    return (row[0].i.int, row[1].i.int, ip, pubkey, period)
 
 #-------------------------------------------------------------------
 # pub/sub notes
@@ -327,6 +415,9 @@ proc delNoteSub(relay: Relay, topic: string) =
   relay.db.exec(sql"DELETE FROM note_sub WHERE topic = ?", topic.DbBlob)
   info &"[note] del {topic}"
 
+proc noteCount(relay: Relay, pubkey: PublicKey): int =
+  ## Return the number of notes currently published by this ip
+  relay.db.getRow(sql"SELECT count(*) FROM note WHERE src = ?", pubkey).get()[0].i.int
 
 #-------------------------------------------------------------------
 # send/receive data
@@ -375,7 +466,7 @@ proc delExpiredChunks(relay: Relay) =
 proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: RelayCommand) =
   when LOG_COMMS:
     info "[" & conn.pubkey.abbr & "] DO " & $cmd
-  if conn.pubkey.string == "" and cmd.kind != Iam:
+  if conn.pubkey.isNone and cmd.kind != Iam:
     conn.sendError("Not allowed", cmd.kind, NotAllowed)
     return
 
@@ -396,17 +487,25 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
       return
 
     # successful connection
-    conn.pubkey = cmd.iam_pubkey
-    relay.clients[conn.pubkey] = conn
+    let pubkey = cmd.iam_pubkey
+    conn.pubkey = some(pubkey)
+    relay.clients[pubkey] = conn
     info &"[{conn.pubkey.abbr}] connected"
     conn.sendOkay cmd.kind
 
     # send all queued messages
     relay.delExpiredMessages()
     while true:
-      let nexto = relay.nextMessage(conn.pubkey)
+      let nexto = relay.nextMessage(pubkey)
       if nexto.isSome:
-        conn.sendMessage(nexto.get())
+        let msg = nexto.get()
+        conn.sendMessage(msg)
+        if msg.kind == Data:
+          relay.db.record_transfer_stat(
+            ip = conn.ip,
+            pubkey = pubkey,
+            data_out = msg.data_val.len,
+          )
       else:
         break
   of PublishNote:
@@ -415,27 +514,42 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     elif cmd.pub_data.len > RELAY_MAX_NOTE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
     else:
-      let opubkey = relay.getNoteSub(cmd.pub_topic)
-      if opubkey.isSome:
-        # someone is waiting
-        var other_conn = relay.clients[opubkey.get()]
-        conn.sendOkay cmd.kind
-        other_conn.sendMessage(RelayMessage(
-          kind: Note,
-          note_data: cmd.pub_data,
-          note_topic: cmd.pub_topic,
-        ))
-        relay.delNoteSub(cmd.pub_topic)
+      let pubkey = conn.pubkey.get()
+      if relay.noteCount(pubkey) >= RELAY_MAX_NOTES:
+        conn.sendError("Too many notes", cmd.kind, StorageLimitExceeded)
       else:
-        # no one is waiting
-        try:
-          relay.db.exec(sql"INSERT INTO note (topic, data) VALUES (?, ?)",
-            cmd.pub_topic.DbBlob,
-            cmd.pub_data.DbBlob,
-          )
+        relay.db.record_transfer_stat(
+          ip = conn.ip,
+          pubkey = pubkey,
+          data_in = cmd.pub_data.len,
+        )
+        let opubkey = relay.getNoteSub(cmd.pub_topic)
+        if opubkey.isSome:
+          # someone is waiting
+          var other_conn = relay.clients[opubkey.get()]
           conn.sendOkay cmd.kind
-        except:
-          conn.sendError("Duplicate topic", cmd.kind, Generic)
+          other_conn.sendMessage(RelayMessage(
+            kind: Note,
+            note_data: cmd.pub_data,
+            note_topic: cmd.pub_topic,
+          ))
+          relay.delNoteSub(cmd.pub_topic)
+          relay.db.record_transfer_stat(
+            ip = other_conn.ip,
+            pubkey = other_conn.pubkey.get(),
+            data_out = cmd.pub_data.len,
+          )
+        else:
+          # no one is waiting
+          try:
+            relay.db.exec(sql"INSERT INTO note (topic, data, src) VALUES (?, ?, ?)",
+              cmd.pub_topic.DbBlob,
+              cmd.pub_data.DbBlob,
+              pubkey,
+            )
+            conn.sendOkay cmd.kind
+          except:
+            conn.sendError("Duplicate topic", cmd.kind, Generic)
   of FetchNote:
     if cmd.fetch_topic.len > RELAY_MAX_TOPIC_SIZE:
       conn.sendError("Topic too long", cmd.kind, TooLarge)
@@ -443,30 +557,50 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
       let odata = relay.popNote(cmd.fetch_topic)
       if odata.isSome():
         # the note is already here
+        let data = odata.get()
         conn.sendMessage(RelayMessage(
           kind: Note,
-          note_data: odata.get(),
+          note_data: data,
           note_topic: cmd.fetch_topic,
         ))
+        relay.db.record_transfer_stat(
+          ip = conn.ip,
+          pubkey = conn.pubkey.get(),
+          data_out = data.len,
+        )
       else:
         # the note isn't here yet
-        relay.addNoteSub(cmd.fetch_topic, conn.pubkey)
+        relay.addNoteSub(cmd.fetch_topic, conn.pubkey.get())
   of SendData:
     if cmd.send_val.len > RELAY_MAX_MESSAGE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
     else:
-      if relay.clients.hasKey(cmd.send_dst):
-        # dst is online
-        var other_conn = relay.clients[cmd.send_dst]
-        other_conn.sendMessage(RelayMessage(
-          kind: Data,
-          data_src: conn.pubkey,
-          data_val: cmd.send_val,
-        ))
+      let pubkey = conn.pubkey.get()
+      if relay.max_transfer_rate != 0 and relay.db.current_data_in(pubkey) > relay.max_transfer_rate:
+        conn.sendError("Rate limit exceeded", cmd.kind, TransferLimitExceeeded)
       else:
-        # dst is offline
-        relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
-            conn.pubkey, cmd.send_dst, cmd.send_val.DbBlob)
+        relay.db.record_transfer_stat(
+          ip = conn.ip,
+          pubkey = pubkey,
+          data_in = cmd.send_val.len,
+        )
+        if relay.clients.hasKey(cmd.send_dst):
+          # dst is online
+          var other_conn = relay.clients[cmd.send_dst]
+          other_conn.sendMessage(RelayMessage(
+            kind: Data,
+            data_src: pubkey,
+            data_val: cmd.send_val,
+          ))
+          relay.db.record_transfer_stat(
+            ip = other_conn.ip,
+            pubkey = other_conn.pubkey.get(),
+            data_in = cmd.send_val.len,
+          )
+        else:
+          # dst is offline
+          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
+              pubkey, cmd.send_dst, cmd.send_val.DbBlob)
   of StoreChunk:
     if cmd.chunk_key.len > RELAY_MAX_CHUNK_KEY_SIZE:
       conn.sendError("Key too long", cmd.kind, TooLarge)
@@ -475,33 +609,38 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     elif cmd.chunk_dst.len > RELAY_MAX_CHUNK_DSTS:
       conn.sendError("Too many recipients", cmd.kind, TooLarge)
     else:
-      relay.db.exec(sql"BEGIN")
-      try:
-        relay.db.exec(sql"DELETE FROM chunk_dst WHERE src=? AND key=?", conn.pubkey, cmd.chunk_key.DbBlob)
-        let offset = when TESTMODE:
-            $TIME_SKEW & " seconds"
-          else:
-            "0 seconds"
-        relay.db.exec(sql"""
-          INSERT OR REPLACE INTO chunk (last_used, src, key, val)
-          VALUES (datetime('now', ?), ?, ?, ?)
-          """, offset, conn.pubkey, cmd.chunk_key.DbBlob, cmd.chunk_val.DbBlob)
-        var dsts: seq[PublicKey]
-        dsts.add(cmd.chunk_dst)
-        if conn.pubkey notin dsts:
-          dsts.add(conn.pubkey)
-        for dst in dsts:
-          relay.db.exec(sql"INSERT INTO chunk_dst (src, key, dst) VALUES (?, ?, ?)",
-            conn.pubkey, cmd.chunk_key.DbBlob, dst)
-        relay.db.exec(sql"COMMIT")
-      except CatchableError:
-        relay.db.exec(sql"ROLLBACK")
+      let pubkey = conn.pubkey.get()
+      if relay.max_chunk_space > 0 and relay.db.chunk_space_used(pubkey) > relay.max_chunk_space:
+        conn.sendError("Too much chunk data", cmd.kind, StorageLimitExceeded)
+      else:
+        relay.db.exec(sql"BEGIN")
+        try:
+          relay.db.exec(sql"DELETE FROM chunk_dst WHERE src=? AND key=?", pubkey, cmd.chunk_key.DbBlob)
+          let offset = when TESTMODE:
+              $TIME_SKEW & " seconds"
+            else:
+              "0 seconds"
+          relay.db.exec(sql"""
+            INSERT OR REPLACE INTO chunk (last_used, src, key, val)
+            VALUES (datetime('now', ?), ?, ?, ?)
+            """, offset, pubkey, cmd.chunk_key.DbBlob, cmd.chunk_val.DbBlob)
+          var dsts: seq[PublicKey]
+          dsts.add(cmd.chunk_dst)
+          if pubkey notin dsts:
+            dsts.add(pubkey)
+          for dst in dsts:
+            relay.db.exec(sql"INSERT INTO chunk_dst (src, key, dst) VALUES (?, ?, ?)",
+              pubkey, cmd.chunk_key.DbBlob, dst)
+          relay.db.exec(sql"COMMIT")
+        except CatchableError:
+          relay.db.exec(sql"ROLLBACK")
   of GetChunks:
     for key in cmd.chunk_keys:
       if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
         conn.sendError("Key too long", cmd.kind, TooLarge)
         return
     relay.delExpiredChunks()
+    let pubkey = conn.pubkey.get()
     for key in cmd.chunk_keys:
       let orow = relay.db.getRow(sql"""
         SELECT
@@ -515,7 +654,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           d.src = ?
           AND d.key = ?
           AND d.dst = ?
-        """, cmd.chunk_src, key.DbBlob, conn.pubkey)
+        """, cmd.chunk_src, key.DbBlob, pubkey)
       if orow.isSome:
         let row = orow.get()
         conn.sendMessage(RelayMessage(
@@ -531,3 +670,46 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           chunk_key: key,
           chunk_val: none[string](),
         ))
+  of ChunksPresent:
+    for key in cmd.present_keys:
+      if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
+        conn.sendError("Key too long", cmd.kind, TooLarge)
+        return
+    relay.delExpiredChunks()
+    let pubkey = conn.pubkey.get()
+    var present: seq[string]
+    var absent: seq[string]
+    for key in cmd.present_keys:
+      let orow = relay.db.getRow(sql"""
+        SELECT
+          1
+        FROM
+          chunk_dst AS d
+          JOIN chunk AS c
+            ON d.src = c.src
+              AND d.key = c.key
+        WHERE
+          d.src = ?
+          AND d.key = ?
+          AND d.dst = ?
+        """, cmd.present_src, key.DbBlob, pubkey)
+      if orow.isSome:
+        present.add(key)
+        if cmd.present_src == pubkey:
+          # reset the expiration of the chunk, since the owner
+          # is touching it
+          let offset = when TESTMODE:
+              $TIME_SKEW & " seconds"
+            else:
+              "0 seconds"
+          relay.db.exec(sql"""
+            UPDATE chunk SET last_used = datetime('now', ?) WHERE src = ? AND key = ?
+            """, offset, cmd.present_src, key.DbBlob)
+      else:
+        absent.add(key)
+    conn.sendMessage(RelayMessage(
+      kind: ChunkStatus,
+      status_src: cmd.present_src,
+      present: present,
+      absent: absent,
+    ))

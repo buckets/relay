@@ -23,6 +23,7 @@ test "RelayMessage":
       of Note: RelayMessage(kind: Note, note_topic: "something", note_data: "data")
       of Data: RelayMessage(kind: Data, data_src: "hey".PublicKey, data_val: "foo")
       of Chunk: RelayMessage(kind: Chunk, chunk_src: "hey".PublicKey, chunk_key: "key", chunk_val: some("theval"))
+      of ChunkStatus: RelayMessage(kind: ChunkStatus, status_src: "a".PublicKey, present: @["foo"], absent: @["bar"])
     let serialized = example.serialize()
     info $example
     info "serialized: " & serialized.nice
@@ -50,6 +51,11 @@ test "RelayCommand":
           chunk_val: "someval"
         )
       of GetChunks: RelayCommand(kind: GetChunks, chunk_src: "hey".PublicKey, chunk_keys: @["foo", "bar"])
+      of ChunksPresent: RelayCommand(
+          kind: ChunksPresent,
+          present_src: "hey".PublicKey,
+          present_keys: @["foo", "Bar"],
+        )
     let serialized = example.serialize()
     info $example
     info "serialized: " & serialized

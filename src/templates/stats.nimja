@@ -1,0 +1,119 @@
+<html>
+  <head>
+    <title>Buckets Relay Stats</title>
+    <link rel="shortcut icon" href=/static/favicon.png type=image/png>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+    * {
+      font-family: Lato, sans-serif;
+    }
+    .right {
+      text-align: right;
+    }
+    .pre {
+      font-family: monospace;
+    }
+    table {
+      border-collapse: collapse;
+    }
+    td, th {
+      border: 1px solid #ddd;
+      padding: 0 3px;
+    }
+    </style>
+  </head>
+  <body>
+    <h1>Stats [{{ datarange.a }}, {{ datarange.b }}]</h1>
+
+    <h2>Transfer</h2>
+    <table>
+      <tr>
+        <th>Data in</th>
+        <th>Data out</th>
+        <th>Total</th>
+      </tr>
+      <tr>
+        <td class="right">{{ total_data_in }}</td>
+        <td class="right">{{ total_data_out }}</td>
+        <td class="right">{{ total_data_in + total_data_out }}</td>
+      </tr>
+    </table>
+
+    <h2>Storage total</h2>
+    <table>
+      <tr>
+        <th></th>
+        <th>Notes</th>
+        <th>Messages</th>
+        <th>Chunks</th>
+        <th>Total</th>
+      </tr>
+      <tr>
+        <th>Size</th>
+        <td class="right">{{ total_stored_note }}</td>
+        <td class="right">{{ total_stored_message }}</td>
+        <td class="right">{{ total_stored_chunk }}</td>
+        <td class="right">{{ total_stored }}</td>
+      </tr>
+      <tr>
+        <th>Count</th>
+        <td class="right">{{ num_note }}</td>
+        <td class="right">{{ num_message }}</td>
+        <td class="right">{{ num_chunk }}</td>
+        <td class="right"></td>
+      </tr>
+    </table>
+
+    <h2>Top Traffic by IP</h2>
+    <table>
+      <tr>
+        <th>IP</th>
+        <th>Data in</th>
+        <th>Data out</th>
+        <th>Total</th>
+      </tr>
+      {% for tot in traffic_by_ip %}
+      <tr>
+        <td class="pre">{{ tot.ip }}</td>
+        <td class="right">{{ tot.data_in }}</td>
+        <td class="right">{{ tot.data_out }}</td>
+        <td class="right">{{ tot.data_in + tot.data_out }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <h2>Top Traffic by Pubkey</h2>
+    <table>
+      <tr>
+        <th>Pubkey</th>
+        <th>Data in</th>
+        <th>Data out</th>
+        <th>Total</th>
+      </tr>
+      {% for tot in traffic_by_pubkey %}
+      <tr>
+        <td class="pre">{{ tot.pubkey.abbr }}</td>
+        <td class="right">{{ tot.data_in }}</td>
+        <td class="right">{{ tot.data_out }}</td>
+        <td class="right">{{ tot.data_in + tot.data_out }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+
+    <h2>Top storage by Pubkey</h2>
+    <table>
+      <tr>
+        <th>Pubkey</th>
+        <th>Message bytes</th>
+        <th>Chunk bytes</th>
+      </tr>
+      {% for tot in storage_by_pubkey %}
+      <tr>
+        <td class="pre">{{ tot.pubkey.abbr }}</td>
+        <td class="right">{{ tot.message_size }}</td>
+        <td class="right">{{ tot.chunk_size }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </body>
+</html>

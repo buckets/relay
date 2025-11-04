@@ -3,12 +3,12 @@ import std/net
 import std/options
 import std/os
 import std/osproc
+import std/streams
 import std/unittest
 
 import ./util
 
 import sampleclient
-import server2
 import proto2
 
 import ws
@@ -24,13 +24,17 @@ proc startServer(port: Port): Process =
   let bin = absolutePath(currentSourcePath().parentDir() / "bin" / "server2")
   bin.parentDir.createDir()
   echo "compiling ", bin.relativePath(".")
-  echo execProcess("nim",
+  let compileProcess = startProcess(
+    "nim",
     workingDir = currentSourcePath().parentDir().parentDir(),
-    args = [
-      "c", "-d:testmode", "-o:" & bin, "src"/"server2.nim",
-    ],
+    args = ["c", "-d:testmode", "-o:" & bin, "src/server2.nim"],
     options = {poStdErrToStdOut, poUsePath}
   )
+  let output = compileProcess.outputStream.readAll()
+  let exitCode = compileProcess.waitForExit()
+  echo output
+  if exitCode != 0:
+    raise newException(OSError, "Compilation failed with exit code " & $exitCode)
   echo "compiled ", bin.relativePath(".")
   
   startProcess(bin,
@@ -66,11 +70,11 @@ waitForPort(TESTPORT)
 proc serverURL(): string =
   "ws://127.0.0.1:" & $TESTPORT & "/ws"
 
-proc testClient(keys: KeyPair): NetstringSocket =
+proc testClient(keys: KeyPair): NetstringClient =
   let url = serverURL()
   newRelayClient(url, keys)
 
-proc testClient(): NetstringSocket =
+proc testClient(): NetstringClient =
   testClient(genkeys())
 
 
@@ -156,7 +160,7 @@ suite "invalid":
   test "RelayMessage":
     var keys = genkeys()
     let ws = waitFor newWebSocket(serverURL())
-    let ns = newNetstringSocket(ws)
+    let ns = newNetstringClient(ws)
     let who = waitFor ns.receiveMessage()
     let answer = who.who_challenge.answer(keys.sk)
     waitFor ns.sendCommand(RelayCommand(kind: Iam, iam_answer: answer, iam_pubkey: keys.pk))

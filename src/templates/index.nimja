@@ -1,0 +1,60 @@
+<html>
+  <head>
+    <title>Buckets Relay</title>
+    <link rel="shortcut icon" href=/static/favicon.png type=image/png>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+    * {
+      font-family: Lato, sans-serif;
+    }
+    body {
+      background-color: rgba(41, 156, 237, 1.0);
+      background-color: rgba(52, 73, 94,1.0);
+    }
+    .card {
+      background-color: white;
+      margin: 2rem auto;
+      max-width: 40rem;
+      border-radius: 16px;
+      padding: 2rem;
+    }
+    h1 {
+      margin-top: 0;
+      margin-bottom: 0.25em;
+    }
+    h1,h2,h3,h4,h5 {
+      color: #34495e;
+    }
+    p {
+      text-align: left;
+      line-height: 1.5rem;
+    }
+    </style>
+  </head>
+  <body style="text-align: center;">
+    <div class="card">
+      <div>
+        <img src="/static/logo.png" style="vertical-align: middle; width: 64px; height: 64px; margin-bottom: .5em;">
+      </div>
+
+      <h1>
+        Buckets Relay
+      </h1>
+      <div style="text-align: center;">
+        {{ VERSION }}
+      </div>
+
+      <p>
+        If you use <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a>, this relay lets you securely share your budget among your devices. Data is stored on this relay for a time, but is removed after periods of inactivity. All data passing through this relay is encrypted end-to-end.
+      </p>
+
+      <p>
+        Use of this service may be revoked at any time for any reason. Also, for now it's free to use, but that could change depending on the cost to run it.
+      </p>
+
+      <p>
+        The code for this is <a href="https://github.com/buckets/relay" target="_blank">open source</a> if you'd like to run your own instance.
+      </p>
+    </div>    
+  </body>
+</html>

@@ -53,6 +53,15 @@
         "kind": "git"
       },
       "sha": "d3a116e1047b6b1363dfee08876a8f1c1bb1a128"
+    },
+    "jester": {
+      "pkgname": "jester",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/dom96/jester/",
+        "kind": "git"
+      },
+      "sha": "ac9b8541dce64feff9b53b700cab8496c1816651"
     }
   }
 }

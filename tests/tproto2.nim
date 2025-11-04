@@ -95,7 +95,7 @@ proc authenticatedConn(relay: Relay): RelayConnection[TestClient] =
 # End of TestClient
 #---------------------------------
 
-suite "Auth":
+suite "auth":
   test "basic":
     let relay = testRelay()
     let aclient = newTestClient(genkeys())
@@ -186,7 +186,7 @@ suite "Auth":
     let err = alice.pop(Error)
     check err.err_cmd == Iam
 
-suite "PublishNote":
+suite "notes":
 
   test "basic":
     let relay = testRelay()
@@ -380,6 +380,26 @@ suite "PublishNote":
     let data = bob.pop(Note)
     check data.note_data == "c\x00d"
     check data.note_topic == "a\x00b"
+  
+  test "max notes":
+    var relay = testRelay()
+    var alice = relay.authenticatedConn()
+    for i in 0..<RELAY_MAX_NOTES:
+      relay.handleCommand(alice, RelayCommand(
+        kind: PublishNote,
+        pub_topic: "topic" & $i,
+        pub_data: "data",
+      ))
+      let ok = alice.pop(Okay)
+      check ok.ok_cmd == PublishNote
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "lasttopic",
+      pub_data: "data",
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == PublishNote
+    check err.err_code == StorageLimitExceeded
 
 suite "data":
 
@@ -444,6 +464,23 @@ suite "data":
       skewTime(RELAY_MESSAGE_DURATION + 1)
       var bob2 = relay.authenticatedConn(bob.keys)
       check bob2.msgCount == 0
+  
+  test "max transfer":
+    var relay = testRelay()
+    let chunksize = RELAY_MAX_MESSAGE_SIZE div 2
+    relay.max_transfer_rate = chunksize * 10
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    let count = relay.max_transfer_rate div chunksize + 2
+    for i in 0..count:
+      relay.handleCommand(alice, RelayCommand(
+        kind: SendData,
+        send_dst: bob.pk,
+        send_val: "a".repeat(chunksize),
+      ))
+    let err = alice.pop(Error)
+    check err.err_code == TransferLimitExceeeded
+    check err.err_cmd == SendData
 
 
 proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[PublicKey]()) =
@@ -463,7 +500,16 @@ proc getChunk(conn: var RelayConnection[TestClient], src: var RelayConnection[Te
   let chunk = conn.pop(Chunk)
   return chunk.chunk_val
 
-suite "store":
+proc chunkExists(conn: var RelayConnection[TestClient], src: var RelayConnection[TestClient], key: string): bool =
+  conn.relay.handleCommand(conn, RelayCommand(
+    kind: ChunksPresent,
+    present_src: src.pk,
+    present_keys: @[key],
+  ))
+  let resp = conn.pop(ChunkStatus)
+  return key in resp.present
+
+suite "chunks":
 
   test "basic":
     let relay = testRelay()
@@ -517,6 +563,7 @@ suite "store":
     alice.storeChunk("key", "first")
     alice.storeChunk("key", "second")
     check alice.getChunk(alice, "key").get() == "second"
+    check alice.chunkExists(alice, "key")
 
   test "multiple dst":
     let relay = testRelay()
@@ -540,6 +587,7 @@ suite "store":
       check chunk.chunk_src == alice.pk
       check chunk.chunk_key == "dne"
       check chunk.chunk_val.isNone()
+    check alice.chunkExists(alice, "dne") == false
   
   test "only dst allowed":
     let relay = testRelay()
@@ -547,14 +595,18 @@ suite "store":
     var bob = relay.authenticatedConn()
     alice.storeChunk("key", "first")
     check bob.getChunk(alice, "key").isNone()
+    check alice.chunkExists(alice, "key")
+    check bob.chunkExists(alice, "key") == false
 
   when not defined(release):
     test "expiration":
       let relay = testRelay()
       var alice = relay.authenticatedConn()
       alice.storeChunk("key", "foo")
+      check alice.chunkExists(alice, "key")
       skewTime(RELAY_MESSAGE_DURATION + 1)
       check alice.getChunk(alice, "key").isNone()
+      check alice.chunkExists(alice, "key") == false
   
   when not defined(release):
     test "expiration update":
@@ -566,6 +618,20 @@ suite "store":
       skewTime(3)
       check alice.getChunk(alice, "key").get() == "foo"
   
+  when not defined(release):
+    test "expiration update status":
+      let relay = testRelay()
+      var alice = relay.authenticatedConn()
+      alice.storeChunk("key", "foo")
+      checkpoint $relay.db.getAllRows(sql"SELECT src, key, last_used FROM chunk")
+      skewTime(RELAY_MESSAGE_DURATION - 1)
+      check alice.chunkExists(alice, "key")
+      checkpoint $relay.db.getAllRows(sql"SELECT src, key, last_used FROM chunk")
+      skewTime(3)
+      checkpoint $relay.db.getAllRows(sql"SELECT src, key, last_used FROM chunk")
+      check alice.chunkExists(alice, "key")
+      
+
   test "remove dst":
     let relay = testRelay()
     var alice = relay.authenticatedConn()
@@ -573,10 +639,14 @@ suite "store":
     var sam = relay.authenticatedConn()
     alice.storeChunk("key", "first", @[bob.pk, sam.pk])
     check bob.getChunk(alice, "key").get() == "first"
+    check bob.chunkExists(alice, "key")
     check sam.getChunk(alice, "key").get() == "first"
+    check sam.chunkExists(alice, "key")
     alice.storeChunk("key", "first", @[bob.pk])
     check bob.getChunk(alice, "key").get() == "first"
+    check bob.chunkExists(alice, "key")
     check sam.getChunk(alice, "key").isNone()
+    check sam.chunkExists(alice, "key") == false
 
   test "max key len":
     let relay = testRelay()
@@ -621,8 +691,7 @@ suite "store":
     var alice = relay.authenticatedConn()
     var dsts: seq[PublicKey]
     for i in 0..(RELAY_MAX_CHUNK_DSTS+1):
-      var conn = relay.authenticatedConn()
-      dsts.add(conn.pk)
+      dsts.add(genkeys().pk)
     relay.handleCommand(alice, RelayCommand(
       kind: StoreChunk,
       chunk_dst: dsts,
@@ -632,8 +701,32 @@ suite "store":
     let err = alice.pop(Error)
     check err.err_cmd == StoreChunk
     check err.err_code == TooLarge
+  
+  test "max storage":
+    var relay = testRelay()
+    relay.max_chunk_space = RELAY_MAX_CHUNK_SIZE * 3 - 1
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
 
-suite "anonymous":
+    for i in 0..<3:
+      relay.handleCommand(alice, RelayCommand(
+        kind: StoreChunk,
+        chunk_dst: @[bob.pk],
+        chunk_key: "key1" & $i,
+        chunk_val: "a".repeat(RELAY_MAX_CHUNK_SIZE),
+      ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[bob.pk],
+      chunk_key: "lastkey",
+      chunk_val: "a".repeat(RELAY_MAX_CHUNK_SIZE),
+    ))
+    let err = alice.pop(Error)
+    check err.err_cmd == StoreChunk
+    check err.err_code == StorageLimitExceeded
+
+
+suite "anon":
 
   test "PublishNote":
     let relay = testRelay()
@@ -702,3 +795,30 @@ suite "anonymous":
     let err = alice.pop(Error)
     check err.err_cmd == GetChunks
     check err.err_code == NotAllowed
+
+suite "stats":
+
+  test "transfer basics":
+    let db = open(":memory:", "", "", "")
+    db.updateSchema()
+    db.record_transfer_stat("ip1", "pubkey".PublicKey, data_in = 1000, data_out = 500)
+    db.record_transfer_stat("ip1", "pubkey".PublicKey, data_in = 2000, data_out = 250)
+    db.record_transfer_stat("ip2", "pubkey".PublicKey, data_in = 3000, data_out = 100)
+    db.record_transfer_stat("ip1", "pubkey2".PublicKey, data_in = 500, data_out = 100)
+
+    check db.stats_transfer_total(ip="ip1") == (1000+2000+500, 500+250+100, "ip1", "".PublicKey, "")
+    check db.stats_transfer_total(pubkey="pubkey".PublicKey) == (1000+2000+3000, 500+250+100, "", "pubkey".PublicKey, "")
+    check db.stats_transfer_total(pubkey="pubkey2".PublicKey) == (500, 100, "", "pubkey2".PublicKey, "")
+
+  test "transfer timeperiods":
+    let db = open(":memory:", "", "", "")
+    db.updateSchema()
+    db.record_transfer_stat_period("ip1", "pubkey".PublicKey, "2010-01", data_in = 1000, data_out = 500)
+    db.record_transfer_stat_period("ip1", "pubkey".PublicKey, "2010-01", data_in = 2000, data_out = 250)
+    db.record_transfer_stat_period("ip2", "pubkey".PublicKey, "2010-02", data_in = 3000, data_out = 100)
+    db.record_transfer_stat_period("ip1", "pubkey2".PublicKey, "2010-02", data_in = 500, data_out = 100)
+
+    check db.stats_transfer_total(period="2010-01") == (1000+2000, 500+250, "", "".PublicKey, "2010-01")
+    check db.stats_transfer_total(period="2010-02") == (3000+500, 100+100, "", "".PublicKey, "2010-02")
+
+  
