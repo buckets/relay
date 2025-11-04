@@ -5,7 +5,9 @@
 
 ## These are the objects used for the protocol.
 ## This file should be kept free of dependencies other than the stdlib
-## as it's meant to be referenced by outside libraries.
+## and should not include async stuff
+## as it's meant to be referenced by outside libraries that may
+## want to do things there own way.
 
 import std/hashes
 import std/options

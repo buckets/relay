@@ -3,12 +3,15 @@ import std/logging
 import std/strformat
 import std/strutils
 import std/deques
+import std/base64
+import std/httpcore
 
 import jester
 import nimja
 import ws
 import ws/jester_extra
 import lowdb/sqlite
+import libsodium/sodium
 
 import ./proto2
 import ./objs
@@ -28,6 +31,11 @@ const
   VERSION = slurp"../CHANGELOG.md".split(" ")[1]
   logo_png = slurp"static/logo.png"
   favicon_png = slurp"static/favicon.png"
+  ADMIN_USERNAME {.strdefine.} = "admin"
+  ADMIN_PASSWORD {.strdefine.} = when not defined(release):
+      "admin"
+    else:
+      staticExec("uuidgen")
 
 var relay: Relay[NetstringSocket] 
 var message_queue = initDeque[QueuedMessage]()
@@ -47,6 +55,24 @@ proc trueClientIP(request: Request): string =
   if result != "":
     return result
   result = request.ip
+
+proc isAdmin(request: Request): bool =
+  if not request.headers.hasKey("Authorization"):
+    return false
+  let authHeader = request.headers["Authorization"]
+  let encodedCreds = authHeader[("Basic ".len)..^1]
+
+  try:
+    let decodedCreds = base64.decode(encodedCreds)
+    let parts = decodedCreds.split(":", 1)
+    if parts.len == 2:
+      let username = parts[0]
+      let password = parts[1]
+      return sodium.memcmp(username, ADMIN_USERNAME) and sodium.memcmp(password, ADMIN_PASSWORD)
+  except CatchableError:
+    return false
+
+  return false
 
 proc newNetstringSocket(sock: WebSocket, ip: string): NetstringSocket =
   new(result)
@@ -131,8 +157,10 @@ router myrouter:
     resp favicon_png
   
   get "/stats":
-    when defined(release):
-      {.fatal: "Add protection to this endpoint".}
+    if not request.isAdmin():
+      responseHeaders.setHeader("WWW-Authenticate", "Basic realm=\"Relay Admin\"")
+      resp Http401, "Unauthorized"
+
     let days_back = "-28 days"
     let datarange: PeriodRange = block:
       let row = relay.db.getRow(sql"""SELECT
