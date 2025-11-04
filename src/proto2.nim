@@ -670,8 +670,8 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           chunk_key: key,
           chunk_val: none[string](),
         ))
-  of ChunksPresent:
-    for key in cmd.present_keys:
+  of HasChunks:
+    for key in cmd.has_keys:
       if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
         conn.sendError("Key too long", cmd.kind, TooLarge)
         return
@@ -679,7 +679,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     let pubkey = conn.pubkey.get()
     var present: seq[string]
     var absent: seq[string]
-    for key in cmd.present_keys:
+    for key in cmd.has_keys:
       let orow = relay.db.getRow(sql"""
         SELECT
           1
@@ -692,10 +692,10 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           d.src = ?
           AND d.key = ?
           AND d.dst = ?
-        """, cmd.present_src, key.DbBlob, pubkey)
+        """, cmd.has_src, key.DbBlob, pubkey)
       if orow.isSome:
         present.add(key)
-        if cmd.present_src == pubkey:
+        if cmd.has_src == pubkey:
           # reset the expiration of the chunk, since the owner
           # is touching it
           let offset = when TESTMODE:
@@ -704,12 +704,12 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
               "0 seconds"
           relay.db.exec(sql"""
             UPDATE chunk SET last_used = datetime('now', ?) WHERE src = ? AND key = ?
-            """, offset, cmd.present_src, key.DbBlob)
+            """, offset, cmd.has_src, key.DbBlob)
       else:
         absent.add(key)
     conn.sendMessage(RelayMessage(
       kind: ChunkStatus,
-      status_src: cmd.present_src,
+      status_src: cmd.has_src,
       present: present,
       absent: absent,
     ))

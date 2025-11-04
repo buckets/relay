@@ -502,9 +502,9 @@ proc getChunk(conn: var RelayConnection[TestClient], src: var RelayConnection[Te
 
 proc chunkExists(conn: var RelayConnection[TestClient], src: var RelayConnection[TestClient], key: string): bool =
   conn.relay.handleCommand(conn, RelayCommand(
-    kind: ChunksPresent,
-    present_src: src.pk,
-    present_keys: @[key],
+    kind: HasChunks,
+    has_src: src.pk,
+    has_keys: @[key],
   ))
   let resp = conn.pop(ChunkStatus)
   return key in resp.present

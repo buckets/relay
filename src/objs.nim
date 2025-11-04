@@ -78,7 +78,7 @@ type
     SendData
     StoreChunk
     GetChunks
-    ChunksPresent
+    HasChunks
 
   RelayCommand* = object
     case kind*: CommandKind
@@ -100,9 +100,9 @@ type
     of GetChunks:
       chunk_src*: PublicKey
       chunk_keys*: seq[string]
-    of ChunksPresent:
-      present_src*: PublicKey
-      present_keys*: seq[string]
+    of HasChunks:
+      has_src*: PublicKey
+      has_keys*: seq[string]
 
 const
   RELAY_MAX_TOPIC_SIZE* = 512
@@ -223,9 +223,9 @@ proc `$`*(cmd: RelayCommand): string =
     result.add &"{cmd.chunk_src.nice.abbr} keys=["
     result.add cmd.chunk_keys.mapIt(it.nice.abbr).join(", ")
     result.add "]"
-  of ChunksPresent:
-    result.add &"{cmd.present_src.nice.abbr} keys=["
-    result.add cmd.present_keys.mapIt(it.nice.abbr).join(", ")
+  of HasChunks:
+    result.add &"{cmd.has_src.nice.abbr} keys=["
+    result.add cmd.has_keys.mapIt(it.nice.abbr).join(", ")
     result.add "]"
   result.add ")"
 
@@ -246,8 +246,8 @@ proc `==`*(a, b: RelayCommand): bool =
       return a.chunk_dst == b.chunk_dst and a.chunk_key == b.chunk_key and a.chunk_val == b.chunk_val
     of GetChunks:
       return a.chunk_src == b.chunk_src and a.chunk_keys == b.chunk_keys
-    of ChunksPresent:
-      return a.present_src == b.present_src and a.present_keys == b.present_keys
+    of HasChunks:
+      return a.has_src == b.has_src and a.has_keys == b.has_keys
 
 #--------------------------------------------------------------
 # serialization
@@ -349,7 +349,7 @@ proc serialize*(kind: CommandKind): char =
   of SendData: 's'
   of StoreChunk: 'c'
   of GetChunks: 'g'
-  of ChunksPresent: 't'
+  of HasChunks: 't'
 
 proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   case val:
@@ -359,7 +359,7 @@ proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   of 's': SendData
   of 'c': StoreChunk
   of 'g': GetChunks
-  of 't': ChunksPresent
+  of 't': HasChunks
   else: raise ValueError.newException("Unknown CommandKind: " & val)
 
 proc serialize*(err: ErrorCode): char =
@@ -515,9 +515,9 @@ proc serialize*(cmd: RelayCommand): string =
   of GetChunks:
     result &= cmd.chunk_src.string.nsencode
     result &= nsencode(cmd.chunk_keys.serialize())
-  of ChunksPresent:
-    result &= cmd.present_src.string.nsencode
-    result &= nsencode(cmd.present_keys.serialize())
+  of HasChunks:
+    result &= cmd.has_src.string.nsencode
+    result &= nsencode(cmd.has_keys.serialize())
 
 proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
   if s.len == 0:
@@ -566,10 +566,10 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
       chunk_src: s.nsdecode(idx).PublicKey,
       chunk_keys: deserialize(seq[string], s.nsdecode(idx)),
     )
-  of ChunksPresent:
+  of HasChunks:
     var idx = 1
     return RelayCommand(
-      kind: ChunksPresent,
-      present_src: s.nsdecode(idx).PublicKey,
-      present_keys: deserialize(seq[string], s.nsdecode(idx)),
+      kind: HasChunks,
+      has_src: s.nsdecode(idx).PublicKey,
+      has_keys: deserialize(seq[string], s.nsdecode(idx)),
     )

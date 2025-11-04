@@ -108,4 +108,16 @@ proc getChunk*(ns: NetstringClient, src: PublicKey, key: string): Future[Option[
   if res.kind == Chunk:
     return res.chunk_val
   else:
-    raise ValueError.newException("Expecing Chunk but got: " & $res)
+    raise ValueError.newException("Expecting Chunk but got: " & $res)
+
+proc hasChunk*(ns: NetstringClient, src: PublicKey, key: string): Future[bool] {.async.} =
+  await ns.sendCommand(RelayCommand(
+    kind: HasChunks,
+    has_src: src,
+    has_keys: @[key],
+  ))
+  let res = await ns.receiveMessage()
+  if res.kind == ChunkStatus:
+    return key in res.present
+  else:
+    raise ValueError.newException("Expecting ChunkStatus but got: " & $res)

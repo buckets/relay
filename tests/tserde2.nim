@@ -51,10 +51,10 @@ test "RelayCommand":
           chunk_val: "someval"
         )
       of GetChunks: RelayCommand(kind: GetChunks, chunk_src: "hey".PublicKey, chunk_keys: @["foo", "bar"])
-      of ChunksPresent: RelayCommand(
-          kind: ChunksPresent,
-          present_src: "hey".PublicKey,
-          present_keys: @["foo", "Bar"],
+      of HasChunks: RelayCommand(
+          kind: HasChunks,
+          has_src: "hey".PublicKey,
+          has_keys: @["foo", "Bar"],
         )
     let serialized = example.serialize()
     info $example
