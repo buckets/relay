@@ -77,6 +77,8 @@ proc isAdmin(request: Request): bool =
 
   return false
 
+proc wcommas(x: int): string = insertSep($x, sep = ',')
+
 proc newNetstringSocket(sock: WebSocket, ip: string): NetstringSocket =
   new(result)
   result.socket = sock
