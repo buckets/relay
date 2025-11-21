@@ -284,6 +284,9 @@ proc main(database: string, port: Port, address = "127.0.0.1") =
   addHandler(L)
   info "Database: ", database
   var db = open(database, "", "", "")
+  db.exec(sql"PRAGMA journal_mode=PERSIST")
+  db.exec(sql"PRAGMA busy_timeout = 5000")
+  db.exec(sql"PRAGMA synchronous = FULL")
   relay = newRelay[NetstringSocket](db)
   info &"Serving on {address}:{port.int}"
   let settings = newSettings(port=port, bindAddr=address)
