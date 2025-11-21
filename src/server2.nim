@@ -176,8 +176,8 @@ router myrouter:
     # total transfer
     let row = relay.db.getRow(sql"""
       SELECT
-        sum(data_in) AS din,
-        sum(data_out) AS dout
+        coalesce(sum(data_in), 0) AS din,
+        coalesce(sum(data_out), 0) AS dout
       FROM
         stats_transfer
       WHERE
@@ -191,7 +191,6 @@ router myrouter:
     let total_stored_message = relay.db.getRow(sql"SELECT coalesce(sum(length(data)), 0) FROM message").get()[0].i
     let total_stored_chunk = relay.db.getRow(sql"SELECT coalesce(sum(length(val)), 0) FROM chunk").get()[0].i
     let total_stored = total_stored_note + total_stored_message + total_stored_chunk
-
     let num_note = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM note").get()[0].i
     let num_message = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM message").get()[0].i
     let num_chunk = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM chunk").get()[0].i
@@ -200,9 +199,9 @@ router myrouter:
     var traffic_by_ip: seq[TransferTotal]
     for row in relay.db.getAllRows(sql"""
       SELECT
-        sum(data_in) AS din,
-        sum(data_out) AS dout,
-        sum(data_in) + sum(data_out) AS total,
+        sum(coalesce(data_in, 0)) AS din,
+        sum(coalesce(data_out, 0)) AS dout,
+        sum(coalesce(data_in, 0)) + sum(coalesce(data_out, 0)) AS total,
         ip
       FROM
         stats_transfer
@@ -224,9 +223,9 @@ router myrouter:
     var traffic_by_pubkey: seq[TransferTotal]
     for row in relay.db.getAllRows(sql"""
       SELECT
-        sum(data_in) AS din,
-        sum(data_out) AS dout,
-        sum(data_in) + sum(data_out) AS total,
+        sum(coalesce(data_in, 0)) AS din,
+        sum(coalesce(data_out, 0)) AS dout,
+        sum(coalesce(data_in, 0)) + sum(coalesce(data_out, 0)) AS total,
         pubkey
       FROM
         stats_transfer
@@ -249,12 +248,12 @@ router myrouter:
     var storage_by_pubkey: seq[StorageStat]
     for row in relay.db.getAllRows(sql"""
         WITH msg AS (
-            SELECT src, SUM(LENGTH(data)) AS msg_bytes
+            SELECT src, SUM(coalesce(LENGTH(data), 0)) AS msg_bytes
             FROM message
             GROUP BY src
         ),
         chunksize AS (
-            SELECT src, SUM(LENGTH(val)) AS chunk_bytes
+            SELECT src, SUM(coalesce(LENGTH(val), 0)) AS chunk_bytes
             FROM chunk
             GROUP BY src
         )
