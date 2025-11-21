@@ -45,6 +45,7 @@ type
     TooLarge = 2
     StorageLimitExceeded = 3
     TransferLimitExceeeded = 4
+    InvalidParams = 5
 
   RelayMessage* = object
     case kind*: MessageKind

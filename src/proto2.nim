@@ -289,6 +289,19 @@ template sendOkay*[T](conn: RelayConnection[T], cmd: CommandKind) =
     ok_cmd: cmd,
   ))
 
+proc is_valid*(x: PublicKey): bool =
+  ## Return true if it looks like a valid public key
+  if x.string.len == 32:
+    return true
+  return false
+
+proc any_invalid(x: seq[PublicKey]): bool =
+  ## Return true if any of the public keys are invalid
+  for pk in x:
+    if not pk.is_valid():
+      return true
+  return false
+
 proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
   new(result)
   result.sender = client
@@ -606,6 +619,8 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   of SendData:
     if cmd.send_val.len > RELAY_MAX_MESSAGE_SIZE:
       conn.sendError("Data too long", cmd.kind, TooLarge)
+    elif not cmd.send_dst.is_valid():
+      conn.sendError("Invalid pubkey", cmd.kind, InvalidParams)
     else:
       let pubkey = conn.pubkey.get()
       if relay.max_transfer_rate != 0 and relay.db.current_data_in(pubkey) > relay.max_transfer_rate:
@@ -645,6 +660,8 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
       conn.sendError("Value too long", cmd.kind, TooLarge)
     elif cmd.chunk_dst.len > RELAY_MAX_CHUNK_DSTS:
       conn.sendError("Too many recipients", cmd.kind, TooLarge)
+    elif cmd.chunk_dst.any_invalid():
+      conn.sendError("Invalid pubkey", cmd.kind, InvalidParams)
     else:
       let pubkey = conn.pubkey.get()
       if relay.max_chunk_space > 0 and relay.db.chunk_space_used(pubkey) > relay.max_chunk_space:

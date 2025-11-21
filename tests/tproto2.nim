@@ -481,6 +481,20 @@ suite "data":
     let err = alice.pop(Error)
     check err.err_code == TransferLimitExceeeded
     check err.err_cmd == SendData
+  
+  test "invalid pubkey":
+    var relay = testRelay()
+    let chunksize = RELAY_MAX_MESSAGE_SIZE div 2
+    relay.max_transfer_rate = chunksize * 10
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      send_dst: "invalid".PublicKey,
+      send_val: "a",
+    ))
+    let err = alice.pop(Error)
+    check err.err_code == InvalidParams
+    check err.err_cmd == SendData
 
 
 proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[PublicKey]()) =
@@ -629,8 +643,7 @@ suite "chunks":
       checkpoint $relay.db.getAllRows(sql"SELECT src, key, last_used FROM chunk")
       skewTime(3)
       checkpoint $relay.db.getAllRows(sql"SELECT src, key, last_used FROM chunk")
-      check alice.chunkExists(alice, "key")
-      
+      check alice.chunkExists(alice, "key")      
 
   test "remove dst":
     let relay = testRelay()
@@ -724,7 +737,19 @@ suite "chunks":
     let err = alice.pop(Error)
     check err.err_cmd == StoreChunk
     check err.err_code == StorageLimitExceeded
-
+  
+  test "invalid pubkey":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @["fake".PublicKey],
+      chunk_key: "a",
+      chunk_val: "b",
+    ))
+    let err = alice.pop(Error)
+    check err.err_code == InvalidParams
+    check err.err_cmd == StoreChunk
 
 suite "anon":
 
