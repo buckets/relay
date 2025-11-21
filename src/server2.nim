@@ -144,6 +144,14 @@ type
     message_size: int
     chunk_size: int
     total_size: int
+  
+  PubkeyEventStat = tuple
+    pubkey: PublicKey
+    count: int
+  
+  IPEventStat = tuple
+    ip: string
+    count: int
 
 router myrouter:
   get "/ws":
@@ -172,6 +180,10 @@ router myrouter:
         strftime('%Y-%W', datetime('now', ?)) AS a,
         strftime('%Y-%W') AS b""", days_back).get()
       (row[0].s, row[1].s)
+
+    # total users
+    let total_ips = relay.db.getRow(sql"SELECT coalesce(count(distinct ip), 0) FROM stats_event").get()[0].i
+    let total_pubkeys = relay.db.getRow(sql"SELECT coalesce(count(distinct pubkey), 0) FROM stats_event").get()[0].i
 
     # total transfer
     let row = relay.db.getRow(sql"""
@@ -274,6 +286,83 @@ router myrouter:
           chunk_size: row[2].i.int,
           total_size: row[3].i.int,
         ))
+    
+    # top events by pubkey
+    var connects_by_pubkey: seq[PubkeyEventStat]
+    for row in relay.db.getAllRows(sql"""
+      SELECT
+        pubkey,
+        COALESCE(SUM(connect), 0)
+      FROM
+        stats_event
+      WHERE
+        period >= ?
+        AND pubkey <> ''
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10
+    """, datarange.a):
+      connects_by_pubkey.add((
+        pubkey: PublicKey.fromDb(row[0].b),
+        count: row[1].i.int,
+      ))
+    
+    var publish_by_pubkey: seq[PubkeyEventStat]
+    for row in relay.db.getAllRows(sql"""
+      SELECT
+        pubkey,
+        COALESCE(SUM(publish), 0)
+      FROM
+        stats_event
+      WHERE
+        period >= ?
+        AND pubkey <> ''
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10
+    """, datarange.a):
+      publish_by_pubkey.add((
+        pubkey: PublicKey.fromDb(row[0].b),
+        count: row[1].i.int,
+      ))
+    
+    var send_by_pubkey: seq[PubkeyEventStat]
+    for row in relay.db.getAllRows(sql"""
+      SELECT
+        pubkey,
+        COALESCE(SUM(send), 0)
+      FROM
+        stats_event
+      WHERE
+        period >= ?
+        AND pubkey <> ''
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10
+    """, datarange.a):
+      send_by_pubkey.add((
+        pubkey: PublicKey.fromDb(row[0].b),
+        count: row[1].i.int,
+      ))
+    
+    var store_by_pubkey: seq[PubkeyEventStat]
+    for row in relay.db.getAllRows(sql"""
+      SELECT
+        pubkey,
+        COALESCE(SUM(store), 0)
+      FROM
+        stats_event
+      WHERE
+        period >= ?
+        AND pubkey <> ''
+      GROUP BY 1
+      ORDER BY 2 DESC
+      LIMIT 10
+    """, datarange.a):
+      store_by_pubkey.add((
+        pubkey: PublicKey.fromDb(row[0].b),
+        count: row[1].i.int,
+      ))
 
     var html = ""
     compileTemplateFile("stats.nimja", baseDir = getScriptDir() / "templates", autoEscape = true, varname = "html")

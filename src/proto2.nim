@@ -229,6 +229,17 @@ proc updateSchema*(db: DbConn) =
       data_out INTEGER DEFAULT 0,
       PRIMARY KEY (period, ip, pubkey)
     )""")
+  db.patch(applied, "connects"):
+    db.exec(sql"""CREATE TABLE stats_event (
+      period TEXT NOT NULL DEFAULT(strftime('%Y-%W')),
+      ip TEXT NOT NULL,
+      pubkey TEXT NOT NULL,
+      connect INTEGER DEFAULT 0,
+      publish INTEGER DEFAULT 0,
+      send INTEGER DEFAULT 0,
+      store INTEGER DEFAULT 0,
+      PRIMARY KEY (period, ip, pubkey)
+    )""")
   
   #----------- in-memory stuff
   db.exec(sql"""CREATE TEMPORARY TABLE note_sub (
@@ -328,6 +339,17 @@ when TESTMODE:
       data_in = data_in + excluded.data_in,
       data_out = data_out + excluded.data_out;
     """, ip, pubkey, period, data_in, data_out)
+
+proc record_event_stat*(db: DbConn, ip: string, pubkey: PublicKey, connect = 0, publish = 0, send = 0, store = 0) =
+  db.exec(sql"""
+  INSERT INTO stats_event (ip, pubkey, connect, publish, send, store)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(period, ip, pubkey) DO UPDATE SET
+    connect = connect + excluded.connect,
+    publish = publish + excluded.publish,
+    send = send + excluded.send,
+    store = store + excluded.store
+  """, ip, pubkey, connect, publish, send, store)
 
 proc chunk_space_used*(db: DbConn, pubkey: PublicKey): int =
   ## Return the amount of space being used by the given public key
@@ -492,6 +514,11 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     relay.clients[pubkey] = conn
     info &"[{conn.pubkey.abbr}] connected"
     conn.sendOkay cmd.kind
+    relay.db.record_event_stat(
+      ip = conn.ip,
+      pubkey = pubkey,
+      connect = 1,
+    )
 
     # send all queued messages
     relay.delExpiredMessages()
@@ -522,6 +549,11 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           ip = conn.ip,
           pubkey = pubkey,
           data_in = cmd.pub_data.len,
+        )
+        relay.db.record_event_stat(
+          ip = conn.ip,
+          pubkey = pubkey,
+          publish = 1,
         )
         let opubkey = relay.getNoteSub(cmd.pub_topic)
         if opubkey.isSome:
@@ -584,6 +616,11 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           pubkey = pubkey,
           data_in = cmd.send_val.len,
         )
+        relay.db.record_event_stat(
+          ip = conn.ip,
+          pubkey = pubkey,
+          send = 1,
+        )
         if relay.clients.hasKey(cmd.send_dst):
           # dst is online
           var other_conn = relay.clients[cmd.send_dst]
@@ -613,6 +650,11 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
       if relay.max_chunk_space > 0 and relay.db.chunk_space_used(pubkey) > relay.max_chunk_space:
         conn.sendError("Too much chunk data", cmd.kind, StorageLimitExceeded)
       else:
+        relay.db.record_event_stat(
+          ip = conn.ip,
+          pubkey = pubkey,
+          store = 1,
+        )
         relay.db.exec(sql"BEGIN")
         try:
           relay.db.exec(sql"DELETE FROM chunk_dst WHERE src=? AND key=?", pubkey, cmd.chunk_key.DbBlob)

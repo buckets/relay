@@ -13,3 +13,4 @@ libs
 *.keys
 *.sqlite
 tests/bin
+*.sqlite-journal

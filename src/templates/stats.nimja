@@ -20,16 +20,31 @@
       border: 1px solid #ddd;
       padding: 0 3px;
     }
+    .rows {
+      display: flex;
+    }
     </style>
   </head>
   <body>
     <h1>Stats [{{ datarange.a }}, {{ datarange.b }}]</h1>
 
+    <h2>Users</h2>
+    <table>
+      <tr>
+        <th>IPs</th>
+        <th>Pubkeys</th>
+      </tr>
+      <tr>
+        <td class="right">{{ total_ips.wcommas }}</td>
+        <td class="right">{{ total_pubkeys.wcommas }}</td>
+      </tr>
+    </table>
+
     <h2>Transfer</h2>
     <table>
       <tr>
-        <th>Data in</th>
-        <th>Data out</th>
+        <th>Bytes in</th>
+        <th>Bytes out</th>
         <th>Total</th>
       </tr>
       <tr>
@@ -49,7 +64,7 @@
         <th>Total</th>
       </tr>
       <tr>
-        <th>Size</th>
+        <th>Bytes</th>
         <td class="right">{{ total_stored_note.wcommas }}</td>
         <td class="right">{{ total_stored_message.wcommas }}</td>
         <td class="right">{{ total_stored_chunk.wcommas }}</td>
@@ -68,8 +83,8 @@
     <table>
       <tr>
         <th>IP</th>
-        <th>Data in</th>
-        <th>Data out</th>
+        <th>Bytes in</th>
+        <th>Bytes out</th>
         <th>Total</th>
       </tr>
       {% for tot in traffic_by_ip %}
@@ -86,8 +101,8 @@
     <table>
       <tr>
         <th>Pubkey</th>
-        <th>Data in</th>
-        <th>Data out</th>
+        <th>Bytes in</th>
+        <th>Bytes out</th>
         <th>Total</th>
       </tr>
       {% for tot in traffic_by_pubkey %}
@@ -115,5 +130,68 @@
       </tr>
       {% endfor %}
     </table>
+
+    <h2>Top events by Pubkey</h2>
+    <div class="rows">
+      <div>
+        <table>
+          <tr>
+            <th>Pubkey</th>
+            <th>Connect</th>
+          </tr>
+          {% for st in connects_by_pubkey %}
+          <tr>
+            <td>{{ st.pubkey.abbr }}</td>
+            <td class="right">{{ st.count.wcommas }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <div>
+        <table>
+          <tr>
+            <th>Pubkey</th>
+            <th>Publish</th>
+          </tr>
+          {% for st in publish_by_pubkey %}
+          <tr>
+            <td>{{ st.pubkey.abbr }}</td>
+            <td class="right">{{ st.count.wcommas }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <div>
+        <table>
+          <tr>
+            <th>Pubkey</th>
+            <th>Send</th>
+          </tr>
+          {% for st in send_by_pubkey %}
+          <tr>
+            <td>{{ st.pubkey.abbr }}</td>
+            <td class="right">{{ st.count.wcommas }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+
+      <div>
+        <table>
+          <tr>
+            <th>Pubkey</th>
+            <th>Store</th>
+          </tr>
+          {% for st in store_by_pubkey %}
+          <tr>
+            <td>{{ st.pubkey.abbr }}</td>
+            <td class="right">{{ st.count.wcommas }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+      </div>
+    </div>
   </body>
 </html>
