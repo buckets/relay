@@ -105,7 +105,10 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
     let data = waitFor client.fetchNote(topic)
     echo data
   of "dst":
-    ctx.dst = PublicKey.deserialize(i.use(args))
+    if args.len == 0:
+      ctx.dst = "".PublicKey
+    else:
+      ctx.dst = PublicKey.deserialize(i.use(args))
     echo "dst for future commands set to ", ctx.dst.serialize()
   of "send":
     var dst = ctx.dst
@@ -118,15 +121,17 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
     echo data
   of "store":
     var dst = ctx.dst
-    if dst.string == "":
+    if dst.string == "" or args.len >= 3:
       dst = PublicKey.deserialize(i.use(args))
+      echo "Using key=" & dst.nice
     let key = i.use(args)
     let val = i.use(args)
     waitFor client.storeChunk(@[dst], key, val)
   of "get":
     var src = ctx.dst
-    if src.string == "":
+    if src.string == "" or args.len >= 2:
       src = PublicKey.deserialize(i.use(args))
+      echo "Using key=" & src.serialize
     let key = i.use(args)
     let odata = waitFor client.getChunk(src, key)
     if odata.isSome:
@@ -135,11 +140,25 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
       echo "(none)"
   of "has":
     var src = ctx.dst
-    if src.string == "":
+    if src.string == "" or args.len >= 2:
       src = PublicKey.deserialize(i.use(args))
+      echo "Using key=" & src.serialize
     let key = i.use(args)
     let res = waitFor client.hasChunk(src, key)
     echo $res
+  of "help":
+    echo """
+  post TOPIC DATA
+  fetch TOPIC
+  dst PUBKEY
+    Set the destination PUBKEY for future commands
+  send [PUBKEY] DATA
+  recv
+  store [PUBKEY] KEY VAL
+  get [PUBKEY] KEY
+  has [PUBKEY] KEY
+  help
+    """
   else:
     echo "Unknown command ", cmd, " ", args  
 

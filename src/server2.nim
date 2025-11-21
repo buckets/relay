@@ -1,10 +1,11 @@
 import std/asyncdispatch
+import std/base64
+import std/deques
+import std/httpcore
 import std/logging
+import std/os
 import std/strformat
 import std/strutils
-import std/deques
-import std/base64
-import std/httpcore
 
 import jester
 import nimja
@@ -31,11 +32,13 @@ const
   VERSION = slurp"../CHANGELOG.md".split(" ")[1]
   logo_png = slurp"static/logo.png"
   favicon_png = slurp"static/favicon.png"
-  ADMIN_USERNAME {.strdefine.} = "admin"
-  ADMIN_PASSWORD {.strdefine.} = when not defined(release):
-      "admin"
-    else:
-      staticExec("uuidgen")
+
+let ADMIN_USERNAME = getEnv("ADMIN_USERNAME", "admin")
+let ADMIN_PWHASH = when defined(release):
+    getEnv("ADMIN_PWHASH", "")
+  else:
+    # the password is 'admin'
+    getEnv("ADMIN_PWHASH", "$argon2id$v=19$m=262144,t=3,p=1$AxXWW9mRuyJjWWbxa4WYoQ$xHAyhzWgKGFH+amM4D1GMuNsPSjGNNp40MueB9dJkgA")
 
 var relay: Relay[NetstringSocket] 
 var message_queue = initDeque[QueuedMessage]()
@@ -68,7 +71,7 @@ proc isAdmin(request: Request): bool =
     if parts.len == 2:
       let username = parts[0]
       let password = parts[1]
-      return sodium.memcmp(username, ADMIN_USERNAME) and sodium.memcmp(password, ADMIN_PASSWORD)
+      return sodium.memcmp(username, ADMIN_USERNAME) and crypto_pwhash_str_verify(ADMIN_PWHASH, password)
   except CatchableError:
     return false
 
@@ -290,6 +293,11 @@ when isMainModule:
   import argparse
   var p = newParser:
     option("-d", "--database", default=some("brelay.sqlite"), help="Database")
+    command("hashpassword"):
+      help("Generate a hash for a password given on stdin")
+      run:
+        let password = stdin.readAll().strip()
+        echo crypto_pwhash_str(password)
     command("server"):
       option("-p", "--port", default=some("9000"))
       option("-a", "--address", default=some("127.0.0.1"))

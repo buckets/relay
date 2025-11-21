@@ -80,7 +80,12 @@ proc testClient(): NetstringClient =
 suite "auth":
 
   test "same key auth":
-    check false
+    var keys = genkeys()
+    var alice = testClient(keys)
+    var alice2 = testClient(keys)
+    var bob = testClient()
+    waitFor bob.sendData(keys.pk, "this is bob")
+    check (waitFor alice2.getData()) == "this is bob"
 
 suite "publishnote":
 
