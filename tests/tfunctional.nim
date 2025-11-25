@@ -8,8 +8,8 @@ import std/unittest
 
 import ./util
 
-import sampleclient
-import proto2
+import bucketsrelay/sampleclient
+import bucketsrelay/proto2
 
 import ws
 
@@ -27,7 +27,7 @@ proc startServer(port: Port): Process =
   let compileProcess = startProcess(
     "nim",
     workingDir = currentSourcePath().parentDir().parentDir(),
-    args = ["c", "-d:testmode", "-o:" & bin, "src/server2.nim"],
+    args = ["c", "-d:testmode", "-o:" & bin, "src/bucketsrelay/server2.nim"],
     options = {poStdErrToStdOut, poUsePath}
   )
   let output = compileProcess.outputStream.readAll()
