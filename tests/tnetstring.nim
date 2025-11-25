@@ -1,6 +1,6 @@
 import std/unittest
 
-import bucketsrelay/objs
+import bucketsrelay/v2/objs
 
 suite "encode":
   test "nsencode":

@@ -8,8 +8,8 @@ import std/unittest
 
 import ./util
 
-import bucketsrelay/sampleclient
-import bucketsrelay/proto2
+import bucketsrelay/v2/sampleclient
+import bucketsrelay/v2/proto2
 
 import ws
 

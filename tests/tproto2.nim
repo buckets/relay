@@ -6,7 +6,7 @@ import std/strutils
 import std/unittest
 
 import lowdb/sqlite
-import bucketsrelay/proto2
+import bucketsrelay/v2/proto2
 
 if getEnv("SHOW_LOGS") != "":
   var L = newConsoleLogger()

@@ -3,8 +3,8 @@ import std/logging
 import std/options
 
 import ./util
-import bucketsrelay/proto2
-import bucketsrelay/objs
+import bucketsrelay/v2/proto2
+import bucketsrelay/v2/objs
 
 test "MessageKind":
   for kind in low(MessageKind)..high(MessageKind):

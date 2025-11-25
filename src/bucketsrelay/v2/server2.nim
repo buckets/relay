@@ -30,8 +30,8 @@ type
 
 const
   VERSION = slurp"../CHANGELOG.md".split(" ")[1]
-  logo_png = slurp"../static/logo.png"
-  favicon_png = slurp"../static/favicon.png"
+  logo_png = slurp"./static/logo.png"
+  favicon_png = slurp"./static/favicon.png"
 
 let ADMIN_USERNAME = getEnv("ADMIN_USERNAME", "admin")
 let ADMIN_PWHASH = when defined(release):
@@ -160,7 +160,7 @@ router myrouter:
   
   get "/":
     var html = ""
-    compileTemplateFile("index.nimja", baseDir = getScriptDir() / ".." / "templates", autoEscape = true, varname = "html")
+    compileTemplateFile("index.nimja", baseDir = getScriptDir() / "templates", autoEscape = true, varname = "html")
     resp html
   
   get "/static/logo.png":
@@ -365,7 +365,7 @@ router myrouter:
       ))
 
     var html = ""
-    compileTemplateFile("stats.nimja", baseDir = getScriptDir() / ".." / "templates", autoEscape = true, varname = "html")
+    compileTemplateFile("stats.nimja", baseDir = getScriptDir() / "templates", autoEscape = true, varname = "html")
     resp html
 
 proc main(database: string, port: Port, address = "127.0.0.1") =

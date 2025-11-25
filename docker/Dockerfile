@@ -10,7 +10,7 @@ RUN pkger fetch
 COPY ./ ./
 COPY docker/config.nims .
 RUN find .
-RUN nim c -d:release -o:brelay src/bucketsrelay/server2.nim
+RUN nim c -d:release -o:brelay src/bucketsrelay/v2/server2.nim
 RUN strip brelay
 
 # -- Stage 2 -- #
