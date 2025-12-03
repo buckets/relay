@@ -247,15 +247,9 @@ suite "notes":
       kind: FetchNote,
       fetch_topic: "heyo",
     ))
-    relay.handleCommand(alice, RelayCommand(
-      kind: PublishNote,
-      pub_topic: "heyo",
-      pub_data: "foo",
-    ))
-    check alice.pop(Okay).ok_cmd == PublishNote
-    let note = alice.pop(Note)
-    check note.note_data == "foo"
-    check note.note_topic == "heyo"
+    let err = alice.pop(Error)
+    check err.err_cmd == FetchNote
+    check err.err_code == NotFound
 
   test "publish max size topic":
     let relay = testRelay()
@@ -308,7 +302,9 @@ suite "notes":
         kind: FetchNote,
         fetch_topic: "topic",
       ))
-      check alice.msgCount == 0
+      let err = alice.pop(Error)
+      check err.err_cmd == FetchNote
+      check err.err_code == NotFound
 
   test "fetch note again":
     let relay = testRelay()
@@ -333,7 +329,9 @@ suite "notes":
       kind: FetchNote,
       fetch_topic: "sometopic",
     ))
-    check alice.msgCount == 0
+    let err = alice.pop(Error)
+    check err.err_cmd == FetchNote
+    check err.err_code == NotFound
     
   test "sub then disconnect, the pub":
     let relay = testRelay()
@@ -344,6 +342,9 @@ suite "notes":
       kind: FetchNote,
       fetch_topic: "foo",
     ))
+    let err = bob.pop(Error)
+    check err.err_cmd == FetchNote
+    check err.err_code == NotFound
     relay.disconnect(bob)
 
     relay.handleCommand(alice, RelayCommand(
