@@ -48,6 +48,7 @@ type
     InvalidParams = 5
 
   RelayMessage* = object
+    resp_id*: int
     case kind*: MessageKind
     of Who:
       who_challenge*: Challenge
@@ -82,6 +83,7 @@ type
     HasChunks
 
   RelayCommand* = object
+    resp_id*: int
     case kind*: CommandKind
     of Iam:
       iam_pubkey*: PublicKey
@@ -186,7 +188,7 @@ proc `$`*(msg: RelayMessage): string =
   result.add ")"
 
 proc `==`*(a, b: RelayMessage): bool =
-  if a.kind != b.kind:
+  if a.kind != b.kind or a.resp_id != b.resp_id:
     return false
   else:
     case a.kind
@@ -231,7 +233,7 @@ proc `$`*(cmd: RelayCommand): string =
   result.add ")"
 
 proc `==`*(a, b: RelayCommand): bool =
-  if a.kind != b.kind:
+  if a.kind != b.kind or a.resp_id != b.resp_id:
     return false
   else:
     case a.kind
@@ -419,6 +421,9 @@ proc deserialize*(typ: typedesc[seq[string]], val: string): seq[string] =
 
 proc serialize*(msg: RelayMessage): string =
   result &= msg.kind.serialize()
+  # For Who and Data messages, resp_id is always omitted (always 0)
+  if msg.kind notin {Who, Data}:
+    result &= nsencode($msg.resp_id)
   case msg.kind
   of Who:
     result &= msg.who_challenge.serialize()
@@ -448,37 +453,45 @@ proc serialize*(msg: RelayMessage): string =
 proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
   if s.len == 0:
     raise ValueError.newException("Empty RelayMessage")
-  let kind = MessageKind.deserialize(s[0])
+  var idx = 0
+  let kind = MessageKind.deserialize(s[idx])
+  idx.inc()
+  # For Who and Data messages, resp_id is always 0 and not serialized
+  let resp_id = if kind in {Who, Data}:
+      0
+    else:
+      s.nsdecode(idx).parseInt()
   case kind
   of Who:
-    return RelayMessage(kind: Who, who_challenge: Challenge.deserialize(s[1..^1]))
+    return RelayMessage(kind: Who, resp_id: resp_id, who_challenge: Challenge.deserialize(s[idx..^1]))
   of Okay:
-    return RelayMessage(kind: Okay, ok_cmd: CommandKind.deserialize(s[1]))
+    return RelayMessage(kind: Okay, resp_id: resp_id, ok_cmd: CommandKind.deserialize(s[idx]))
   of Error:
     return RelayMessage(
       kind: Error,
-      err_cmd: CommandKind.deserialize(s[1]),
-      err_code: ErrorCode.deserialize(s[2]),
-      err_message: s[3..^1]
+      resp_id: resp_id,
+      err_cmd: CommandKind.deserialize(s[idx]),
+      err_code: ErrorCode.deserialize(s[idx+1]),
+      err_message: s[(idx+2)..^1]
     )
   of Note:
-    var idx = 1
     return RelayMessage(
       kind: Note,
+      resp_id: resp_id,
       note_topic: s.nsdecode(idx),
       note_data: s.nsdecode(idx),
     )
   of Data:
-    var idx = 1
     return RelayMessage(
       kind: Data,
+      resp_id: resp_id,
       data_src: s.nsdecode(idx).PublicKey,
       data_val: s.nsdecode(idx),
     )
   of Chunk:
-    var idx = 1
     return RelayMessage(
       kind: Chunk,
+      resp_id: resp_id,
       chunk_src: s.nsdecode(idx).PublicKey,
       chunk_key: s.nsdecode(idx),
       chunk_val: if idx >= s.len:
@@ -487,9 +500,9 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
           some(s.nsdecode(idx)),
     )
   of ChunkStatus:
-    var idx = 1
     return RelayMessage(
       kind: ChunkStatus,
+      resp_id: resp_id,
       status_src: s.nsdecode(idx).PublicKey,
       present: deserialize(seq[string], s.nsdecode(idx)),
       absent: deserialize(seq[string], s.nsdecode(idx)),
@@ -497,6 +510,7 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
 
 proc serialize*(cmd: RelayCommand): string =
   result &= cmd.kind.serialize
+  result &= nsencode($cmd.resp_id)
   case cmd.kind
   of Iam:
     result &= cmd.iam_pubkey.string.nsencode
@@ -523,54 +537,57 @@ proc serialize*(cmd: RelayCommand): string =
 proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
   if s.len == 0:
     raise ValueError.newException("Empty RelayCommand")
-  let kind = CommandKind.deserialize(s[0])
+  var idx = 0
+  let kind = CommandKind.deserialize(s[idx])
+  idx.inc()
+  let resp_id = s.nsdecode(idx).parseInt()
   case kind
   of Iam:
-    var idx = 1
     return RelayCommand(
       kind: Iam,
+      resp_id: resp_id,
       iam_pubkey: s.nsdecode(idx).PublicKey,
       iam_answer: ChallengeAnswer.deserialize(s.nsdecode(idx)),
     )
   of PublishNote:
-    var idx = 1
     return RelayCommand(
       kind: PublishNote,
+      resp_id: resp_id,
       pub_topic: s.nsdecode(idx),
       pub_data: s.nsdecode(idx),
     )
   of FetchNote:
-    var idx = 1
     return RelayCommand(
       kind: FetchNote,
+      resp_id: resp_id,
       fetch_topic: s.nsdecode(idx),
     )
   of SendData:
-    var idx = 1
     return RelayCommand(
       kind: SendData,
+      resp_id: resp_id,
       send_dst: s.nsdecode(idx).PublicKey,
       send_val: s.nsdecode(idx),
     )
   of StoreChunk:
-    var idx = 1
     return RelayCommand(
       kind: StoreChunk,
+      resp_id: resp_id,
       chunk_dst: deserializePubKeys(s.nsdecode(idx)),
       chunk_key: s.nsdecode(idx),
       chunk_val: s.nsdecode(idx),
     )
   of GetChunks:
-    var idx = 1
     return RelayCommand(
       kind: GetChunks,
+      resp_id: resp_id,
       chunk_src: s.nsdecode(idx).PublicKey,
       chunk_keys: deserialize(seq[string], s.nsdecode(idx)),
     )
   of HasChunks:
-    var idx = 1
     return RelayCommand(
       kind: HasChunks,
+      resp_id: resp_id,
       has_src: s.nsdecode(idx).PublicKey,
       has_keys: deserialize(seq[string], s.nsdecode(idx)),
     )

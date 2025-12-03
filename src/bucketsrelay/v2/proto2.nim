@@ -275,18 +275,20 @@ proc newRelay*[T](db: DbConn): Relay[T] =
   result.clients = newTable[PublicKey, RelayConnection[T]]()
   db.updateSchema()
 
-template sendError*[T](conn: RelayConnection[T], msg: string, cmd: CommandKind, code: ErrorCode) =
+template sendError*[T](conn: RelayConnection[T], cmd: RelayCommand, msg: string, code: ErrorCode) =
   conn.sendMessage(RelayMessage(
     kind: Error,
+    resp_id: cmd.resp_id,
     err_code: code,
     err_message: msg,
-    err_cmd: cmd,
+    err_cmd: cmd.kind,
   ))
 
-template sendOkay*[T](conn: RelayConnection[T], cmd: CommandKind) =
+template sendOkay*[T](conn: RelayConnection[T], cmd: RelayCommand) =
   conn.sendMessage(RelayMessage(
     kind: Okay,
-    ok_cmd: cmd,
+    resp_id: cmd.resp_id,
+    ok_cmd: cmd.kind,
   ))
 
 proc is_valid*(x: PublicKey): bool =
@@ -308,6 +310,7 @@ proc initAuth*[T](relay: Relay[T], client: T): RelayConnection[T] =
   result.challenge = some(generateChallenge())
   result.sendMessage(RelayMessage(
     kind: Who,
+    resp_id: 0,  # Who messages are not triggered by a command
     who_challenge: result.challenge.get(),
   ))
   result.relay = relay
@@ -480,6 +483,7 @@ proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
     let row = orow.get()
     result = some(RelayMessage(
       kind: Data,
+      resp_id: 0,  # Data messages are not triggered by recipient's command
       data_src: PublicKey.fromDB(row[0].b),
       data_val: row[1].b.string,
     ))
@@ -502,23 +506,23 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   when LOG_COMMS:
     info "[" & conn.pubkey.abbr & "] DO " & $cmd
   if conn.pubkey.isNone and cmd.kind != Iam:
-    conn.sendError("Not allowed", cmd.kind, NotAllowed)
+    conn.sendError(cmd, "Not allowed", NotAllowed)
     return
 
   case cmd.kind
   of Iam:
     if conn.challenge.isNone:
-      conn.sendError("Already authenticated", cmd.kind, Generic)
+      conn.sendError(cmd, "Already authenticated", Generic)
       return
     let challenge = conn.challenge.get()
     conn.challenge = none[Challenge]() # disable future authentication attempts
-    
+
     try:
       if not is_valid_answer(cmd.iam_pubkey, challenge, cmd.iam_answer):
-        conn.sendError("Invalid answer", cmd.kind, Generic)
+        conn.sendError(cmd, "Invalid answer", Generic)
         return
     except CatchableError:
-      conn.sendError("Invalid answer", cmd.kind, Generic)
+      conn.sendError(cmd, "Invalid answer", Generic)
       return
 
     # successful connection
@@ -526,7 +530,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
     conn.pubkey = some(pubkey)
     relay.clients[pubkey] = conn
     info &"[{conn.pubkey.abbr}] connected"
-    conn.sendOkay cmd.kind
+    conn.sendOkay(cmd)
     relay.db.record_event_stat(
       ip = conn.ip,
       pubkey = pubkey,
@@ -550,13 +554,13 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         break
   of PublishNote:
     if cmd.pub_topic.len > RELAY_MAX_TOPIC_SIZE:
-      conn.sendError("Topic too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Topic too long", TooLarge)
     elif cmd.pub_data.len > RELAY_MAX_NOTE_SIZE:
-      conn.sendError("Data too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Data too long", TooLarge)
     else:
       let pubkey = conn.pubkey.get()
       if relay.noteCount(pubkey) >= RELAY_MAX_NOTES:
-        conn.sendError("Too many notes", cmd.kind, StorageLimitExceeded)
+        conn.sendError(cmd, "Too many notes", StorageLimitExceeded)
       else:
         relay.db.record_transfer_stat(
           ip = conn.ip,
@@ -572,9 +576,10 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         if opubkey.isSome:
           # someone is waiting
           var other_conn = relay.clients[opubkey.get()]
-          conn.sendOkay cmd.kind
+          conn.sendOkay(cmd)
           other_conn.sendMessage(RelayMessage(
             kind: Note,
+            resp_id: 0,  # Not triggered by other_conn's command
             note_data: cmd.pub_data,
             note_topic: cmd.pub_topic,
           ))
@@ -592,12 +597,12 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
               cmd.pub_data.DbBlob,
               pubkey,
             )
-            conn.sendOkay cmd.kind
+            conn.sendOkay(cmd)
           except:
-            conn.sendError("Duplicate topic", cmd.kind, Generic)
+            conn.sendError(cmd, "Duplicate topic", Generic)
   of FetchNote:
     if cmd.fetch_topic.len > RELAY_MAX_TOPIC_SIZE:
-      conn.sendError("Topic too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Topic too long", TooLarge)
     else:
       let odata = relay.popNote(cmd.fetch_topic)
       if odata.isSome():
@@ -605,6 +610,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         let data = odata.get()
         conn.sendMessage(RelayMessage(
           kind: Note,
+          resp_id: cmd.resp_id,  # Response to FetchNote command
           note_data: data,
           note_topic: cmd.fetch_topic,
         ))
@@ -618,13 +624,13 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         relay.addNoteSub(cmd.fetch_topic, conn.pubkey.get())
   of SendData:
     if cmd.send_val.len > RELAY_MAX_MESSAGE_SIZE:
-      conn.sendError("Data too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Data too long", TooLarge)
     elif not cmd.send_dst.is_valid():
-      conn.sendError("Invalid pubkey", cmd.kind, InvalidParams)
+      conn.sendError(cmd, "Invalid pubkey", InvalidParams)
     else:
       let pubkey = conn.pubkey.get()
       if relay.max_transfer_rate != 0 and relay.db.current_data_in(pubkey) > relay.max_transfer_rate:
-        conn.sendError("Rate limit exceeded", cmd.kind, TransferLimitExceeeded)
+        conn.sendError(cmd, "Rate limit exceeded", TransferLimitExceeeded)
       else:
         relay.db.record_transfer_stat(
           ip = conn.ip,
@@ -641,6 +647,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           var other_conn = relay.clients[cmd.send_dst]
           other_conn.sendMessage(RelayMessage(
             kind: Data,
+            resp_id: 0,  # Not triggered by other_conn's command
             data_src: pubkey,
             data_val: cmd.send_val,
           ))
@@ -655,17 +662,17 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
               pubkey, cmd.send_dst, cmd.send_val.DbBlob)
   of StoreChunk:
     if cmd.chunk_key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-      conn.sendError("Key too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Key too long", TooLarge)
     elif cmd.chunk_val.len > RELAY_MAX_CHUNK_SIZE:
-      conn.sendError("Value too long", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Value too long", TooLarge)
     elif cmd.chunk_dst.len > RELAY_MAX_CHUNK_DSTS:
-      conn.sendError("Too many recipients", cmd.kind, TooLarge)
+      conn.sendError(cmd, "Too many recipients", TooLarge)
     elif cmd.chunk_dst.any_invalid():
-      conn.sendError("Invalid pubkey", cmd.kind, InvalidParams)
+      conn.sendError(cmd, "Invalid pubkey", InvalidParams)
     else:
       let pubkey = conn.pubkey.get()
       if relay.max_chunk_space > 0 and relay.db.chunk_space_used(pubkey) > relay.max_chunk_space:
-        conn.sendError("Too much chunk data", cmd.kind, StorageLimitExceeded)
+        conn.sendError(cmd, "Too much chunk data", StorageLimitExceeded)
       else:
         relay.db.record_event_stat(
           ip = conn.ip,
@@ -696,7 +703,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   of GetChunks:
     for key in cmd.chunk_keys:
       if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-        conn.sendError("Key too long", cmd.kind, TooLarge)
+        conn.sendError(cmd, "Key too long", TooLarge)
         return
     relay.delExpiredChunks()
     let pubkey = conn.pubkey.get()
@@ -718,6 +725,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         let row = orow.get()
         conn.sendMessage(RelayMessage(
           kind: Chunk,
+          resp_id: cmd.resp_id,
           chunk_src: cmd.chunk_src,
           chunk_key: key,
           chunk_val: some(row[0].b.string),
@@ -725,6 +733,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
       else:
         conn.sendMessage(RelayMessage(
           kind: Chunk,
+          resp_id: cmd.resp_id,
           chunk_src: cmd.chunk_src,
           chunk_key: key,
           chunk_val: none[string](),
@@ -732,7 +741,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   of HasChunks:
     for key in cmd.has_keys:
       if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-        conn.sendError("Key too long", cmd.kind, TooLarge)
+        conn.sendError(cmd, "Key too long", TooLarge)
         return
     relay.delExpiredChunks()
     let pubkey = conn.pubkey.get()
@@ -768,6 +777,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         absent.add(key)
     conn.sendMessage(RelayMessage(
       kind: ChunkStatus,
+      resp_id: cmd.resp_id,
       status_src: cmd.has_src,
       present: present,
       absent: absent,
