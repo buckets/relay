@@ -46,6 +46,7 @@ type
     StorageLimitExceeded = 3
     TransferLimitExceeeded = 4
     InvalidParams = 5
+    NotFound = 6
 
   RelayMessage* = object
     resp_id*: int
