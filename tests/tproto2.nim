@@ -80,12 +80,14 @@ proc authenticatedConn(relay: Relay, keys: KeyPair): RelayConnection[TestClient]
   let answer = who.who_challenge.answer(client.sk)
   relay.handleCommand(conn, RelayCommand(
     kind: Iam,
+    resp_id: 1,
     iam_answer: answer,
     iam_pubkey: client.pk
   ))
   let ok = conn.pop()
   doAssert ok.kind == Okay
   doAssert ok.ok_cmd == Iam
+  doAssert ok.resp_id == 1
   return conn
 
 proc authenticatedConn(relay: Relay): RelayConnection[TestClient] =
@@ -846,4 +848,173 @@ suite "stats":
     check db.stats_transfer_total(period="2010-01") == (1000+2000, 500+250, "", "".PublicKey, "2010-01")
     check db.stats_transfer_total(period="2010-02") == (3000+500, 100+100, "", "".PublicKey, "2010-02")
 
-  
+suite "resp_id":
+
+  test "Who message has resp_id 0":
+    let relay = testRelay()
+    let client = newTestClient(genkeys())
+    var conn = relay.initAuth(client)
+    let who = conn.pop(Who)
+    check who.resp_id == 0
+
+  test "Iam command response has matching resp_id":
+    let relay = testRelay()
+    let client = newTestClient(genkeys())
+    var conn = relay.initAuth(client)
+    let who = conn.pop(Who)
+    let answer = who.who_challenge.answer(client.sk)
+
+    relay.handleCommand(conn, RelayCommand(
+      kind: Iam,
+      resp_id: 42,
+      iam_answer: answer,
+      iam_pubkey: client.pk
+    ))
+    let ok = conn.pop(Okay)
+    check ok.resp_id == 42
+
+  test "PublishNote response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      resp_id: 123,
+      pub_topic: "test",
+      pub_data: "data",
+    ))
+    let ok = alice.pop(Okay)
+    check ok.resp_id == 123
+
+  test "FetchNote response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    # Publish a note first
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      pub_topic: "test",
+      pub_data: "data",
+    ))
+    discard alice.pop(Okay)
+
+    # Fetch the note with resp_id
+    relay.handleCommand(alice, RelayCommand(
+      kind: FetchNote,
+      resp_id: 456,
+      fetch_topic: "test",
+    ))
+    let note = alice.pop(Note)
+    check note.resp_id == 456
+
+  test "Error response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      resp_id: 789,
+      pub_topic: "a".repeat(RELAY_MAX_TOPIC_SIZE + 1),
+      pub_data: "data",
+    ))
+    let err = alice.pop(Error)
+    check err.resp_id == 789
+
+  test "Data message has resp_id 0 (no command trigger)":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      resp_id: 111,
+      send_dst: bob.pk,
+      send_val: "hello",
+    ))
+
+    # Bob receives the Data message - it should have resp_id 0
+    # because it wasn't triggered by Bob's command
+    let data = bob.pop(Data)
+    check data.resp_id == 0
+
+  test "StoreChunk command response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      resp_id: 222,
+      chunk_dst: @[],
+      chunk_key: "key",
+      chunk_val: "val",
+    ))
+    # StoreChunk doesn't send a response by default, no message to check
+    check alice.msgCount == 0
+
+  test "GetChunks response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    # Store a chunk first
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[],
+      chunk_key: "key",
+      chunk_val: "val",
+    ))
+
+    # Get the chunk with resp_id
+    relay.handleCommand(alice, RelayCommand(
+      kind: GetChunks,
+      resp_id: 333,
+      chunk_src: alice.pk,
+      chunk_keys: @["key"],
+    ))
+    let chunk = alice.pop(Chunk)
+    check chunk.resp_id == 333
+
+  test "HasChunks response has matching resp_id":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    # Store a chunk first
+    relay.handleCommand(alice, RelayCommand(
+      kind: StoreChunk,
+      chunk_dst: @[],
+      chunk_key: "key",
+      chunk_val: "val",
+    ))
+
+    # Check if chunk exists with resp_id
+    relay.handleCommand(alice, RelayCommand(
+      kind: HasChunks,
+      resp_id: 444,
+      has_src: alice.pk,
+      has_keys: @["key"],
+    ))
+    let status = alice.pop(ChunkStatus)
+    check status.resp_id == 444
+
+  test "Multiple commands with different resp_ids":
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+
+    # Send multiple commands with different resp_ids
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      resp_id: 100,
+      pub_topic: "topic1",
+      pub_data: "data1",
+    ))
+    relay.handleCommand(alice, RelayCommand(
+      kind: PublishNote,
+      resp_id: 200,
+      pub_topic: "topic2",
+      pub_data: "data2",
+    ))
+
+    let ok1 = alice.pop(Okay)
+    check ok1.resp_id == 100
+    let ok2 = alice.pop(Okay)
+    check ok2.resp_id == 200
+
