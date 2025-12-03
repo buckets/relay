@@ -245,11 +245,13 @@ suite "notes":
     var alice = relay.authenticatedConn()
     relay.handleCommand(alice, RelayCommand(
       kind: FetchNote,
+      resp_id: 34,
       fetch_topic: "heyo",
     ))
     let err = alice.pop(Error)
     check err.err_cmd == FetchNote
     check err.err_code == NotFound
+    check err.resp_id == 34
 
   test "publish max size topic":
     let relay = testRelay()
