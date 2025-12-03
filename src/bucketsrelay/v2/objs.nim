@@ -16,8 +16,8 @@ import std/strformat
 import std/strutils
 
 type
-  PublicKey* = distinct string
-  SecretKey* = distinct string
+  SignPublicKey* = distinct string
+  SignSecretKey* = distinct string
 
   Challenge* = tuple
     bits: int
@@ -63,14 +63,14 @@ type
       note_topic*: string
       note_data*: string
     of Data:
-      data_src*: PublicKey
+      data_src*: SignPublicKey
       data_val*: string
     of Chunk:
-      chunk_src*: PublicKey
+      chunk_src*: SignPublicKey
       chunk_key*: string
       chunk_val*: Option[string]
     of ChunkStatus:
-      status_src*: PublicKey
+      status_src*: SignPublicKey
       present*: seq[string]
       absent*: seq[string]
 
@@ -87,7 +87,7 @@ type
     resp_id*: int
     case kind*: CommandKind
     of Iam:
-      iam_pubkey*: PublicKey
+      iam_pubkey*: SignPublicKey
       iam_answer*: ChallengeAnswer
     of PublishNote:
       pub_topic*: string
@@ -95,17 +95,17 @@ type
     of FetchNote:
       fetch_topic*: string
     of SendData:
-      send_dst*: PublicKey
+      send_dst*: SignPublicKey
       send_val*: string
     of StoreChunk:
-      chunk_dst*: seq[PublicKey]
+      chunk_dst*: seq[SignPublicKey]
       chunk_key*: string
       chunk_val*: string
     of GetChunks:
-      chunk_src*: PublicKey
+      chunk_src*: SignPublicKey
       chunk_keys*: seq[string]
     of HasChunks:
-      has_src*: PublicKey
+      has_src*: SignPublicKey
       has_keys*: seq[string]
 
 const
@@ -147,13 +147,13 @@ proc nicelong*(o: Option[string]): string =
   else:
     result = o.get().nicelong()
 
-proc nice*(k: PublicKey): string = nice(k.string)
-proc `$`*(k: PublicKey): string = k.nice()
-proc hash*(p: PublicKey): Hash {.borrow.}
-proc `==`*(a,b: PublicKey): bool {.borrow.}
+proc nice*(k: SignPublicKey): string = nice(k.string)
+proc `$`*(k: SignPublicKey): string = k.nice()
+proc hash*(p: SignPublicKey): Hash {.borrow.}
+proc `==`*(a,b: SignPublicKey): bool {.borrow.}
 
-proc abbr*(a: PublicKey): string = abbr(a.nice)
-proc abbr*(a: Option[PublicKey]): string =
+proc abbr*(a: SignPublicKey): string = abbr(a.nice)
+proc abbr*(a: Option[SignPublicKey]): string =
   if a.isSome:
     a.get.abbr
   else:
@@ -402,14 +402,14 @@ proc deserialize*(typ: typedesc[ChallengeAnswer], val: string): ChallengeAnswer 
     signature: val.nsdecode(idx),
   )
 
-proc serialize*(keys: seq[PublicKey]): string =
+proc serialize*(keys: seq[SignPublicKey]): string =
   for key in keys:
     result &= nsencode(key.string)
 
-proc deserializePubKeys*(val: string): seq[PublicKey] =
+proc deserializePubKeys*(val: string): seq[SignPublicKey] =
   var val = val
   while val.len > 0:
-    result.add(val.nschop().PublicKey)
+    result.add(val.nschop().SignPublicKey)
 
 proc serialize*(s: seq[string]): string =
   for item in s:
@@ -486,14 +486,14 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
     return RelayMessage(
       kind: Data,
       resp_id: resp_id,
-      data_src: s.nsdecode(idx).PublicKey,
+      data_src: s.nsdecode(idx).SignPublicKey,
       data_val: s.nsdecode(idx),
     )
   of Chunk:
     return RelayMessage(
       kind: Chunk,
       resp_id: resp_id,
-      chunk_src: s.nsdecode(idx).PublicKey,
+      chunk_src: s.nsdecode(idx).SignPublicKey,
       chunk_key: s.nsdecode(idx),
       chunk_val: if idx >= s.len:
           none[string]()
@@ -504,7 +504,7 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
     return RelayMessage(
       kind: ChunkStatus,
       resp_id: resp_id,
-      status_src: s.nsdecode(idx).PublicKey,
+      status_src: s.nsdecode(idx).SignPublicKey,
       present: deserialize(seq[string], s.nsdecode(idx)),
       absent: deserialize(seq[string], s.nsdecode(idx)),
     )
@@ -547,7 +547,7 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
     return RelayCommand(
       kind: Iam,
       resp_id: resp_id,
-      iam_pubkey: s.nsdecode(idx).PublicKey,
+      iam_pubkey: s.nsdecode(idx).SignPublicKey,
       iam_answer: ChallengeAnswer.deserialize(s.nsdecode(idx)),
     )
   of PublishNote:
@@ -567,7 +567,7 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
     return RelayCommand(
       kind: SendData,
       resp_id: resp_id,
-      send_dst: s.nsdecode(idx).PublicKey,
+      send_dst: s.nsdecode(idx).SignPublicKey,
       send_val: s.nsdecode(idx),
     )
   of StoreChunk:
@@ -582,13 +582,13 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
     return RelayCommand(
       kind: GetChunks,
       resp_id: resp_id,
-      chunk_src: s.nsdecode(idx).PublicKey,
+      chunk_src: s.nsdecode(idx).SignPublicKey,
       chunk_keys: deserialize(seq[string], s.nsdecode(idx)),
     )
   of HasChunks:
     return RelayCommand(
       kind: HasChunks,
       resp_id: resp_id,
-      has_src: s.nsdecode(idx).PublicKey,
+      has_src: s.nsdecode(idx).SignPublicKey,
       has_keys: deserialize(seq[string], s.nsdecode(idx)),
     )

@@ -12,13 +12,13 @@ import ./proto2
 
 type
   CmdContext = object
-    dst: PublicKey
+    dst: SignPublicKey
 
-proc serialize(pubkey: PublicKey): string =
+proc serialize(pubkey: SignPublicKey): string =
   base64.encode(pubkey.string)
 
-proc deserialize(pubkey: typedesc[PublicKey], x: string): PublicKey =
-  base64.decode(x).PublicKey
+proc deserialize(pubkey: typedesc[SignPublicKey], x: string): SignPublicKey =
+  base64.decode(x).SignPublicKey
 
 proc serialize(keys: KeyPair): string =
   base64.encode($(%* {
@@ -28,7 +28,7 @@ proc serialize(keys: KeyPair): string =
 
 proc deserialize(pair: typedesc[KeyPair], x: string): KeyPair =
   let j = base64.decode(x).parseJson()
-  (j["pk"].getStr().PublicKey, j["sk"].getStr().SecretKey)
+  (j["pk"].getStr().SignPublicKey, j["sk"].getStr().SignSecretKey)
 
 proc loadKeys(src: string): KeyPair =
   let parts = src.split(":", 1)
@@ -106,14 +106,14 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
     echo data
   of "dst":
     if args.len == 0:
-      ctx.dst = "".PublicKey
+      ctx.dst = "".SignPublicKey
     else:
-      ctx.dst = PublicKey.deserialize(i.use(args))
+      ctx.dst = SignPublicKey.deserialize(i.use(args))
     echo "dst for future commands set to ", ctx.dst.serialize()
   of "send":
     var dst = ctx.dst
     if dst.string == "":
-      dst = PublicKey.deserialize(i.use(args))
+      dst = SignPublicKey.deserialize(i.use(args))
     let val = i.use(args)
     waitFor client.sendData(dst, val)
   of "recv":
@@ -122,7 +122,7 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
   of "store":
     var dst = ctx.dst
     if dst.string == "" or args.len >= 3:
-      dst = PublicKey.deserialize(i.use(args))
+      dst = SignPublicKey.deserialize(i.use(args))
       echo "Using key=" & dst.nice
     let key = i.use(args)
     let val = i.use(args)
@@ -130,7 +130,7 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
   of "get":
     var src = ctx.dst
     if src.string == "" or args.len >= 2:
-      src = PublicKey.deserialize(i.use(args))
+      src = SignPublicKey.deserialize(i.use(args))
       echo "Using key=" & src.serialize
     let key = i.use(args)
     let odata = waitFor client.getChunk(src, key)
@@ -141,7 +141,7 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
   of "has":
     var src = ctx.dst
     if src.string == "" or args.len >= 2:
-      src = PublicKey.deserialize(i.use(args))
+      src = SignPublicKey.deserialize(i.use(args))
       echo "Using key=" & src.serialize
     let key = i.use(args)
     let res = waitFor client.hasChunk(src, key)
@@ -162,7 +162,7 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
   else:
     echo "Unknown command ", cmd, " ", args  
 
-proc main(url: string, keys: KeyPair, dst = "".PublicKey) =
+proc main(url: string, keys: KeyPair, dst = "".SignPublicKey) =
   # authenticate
   echo "...pubkey: ", keys.pk.serialize
   echo "...connecting..."
@@ -202,9 +202,9 @@ when isMainModule:
       option("-d", "--dst", help = "Default destination")
       run:
         var dst = if opts.dst != "":
-            PublicKey.deserialize(opts.dst)
+            SignPublicKey.deserialize(opts.dst)
           else:
-            default(PublicKey)
+            default(SignPublicKey)
         main(opts.parentOpts.url, keys = loadKeys(opts.parentOpts.keys), dst = dst)
 
   try:

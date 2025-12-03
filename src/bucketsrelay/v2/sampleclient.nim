@@ -76,7 +76,7 @@ proc fetchNote*(ns: NetstringClient, topic: string): Future[string] {.async.} =
   else:
     raise ValueError.newException("No such note: " & topic)
 
-proc sendData*(ns: NetstringClient, dst: PublicKey, val: string) {.async.} =
+proc sendData*(ns: NetstringClient, dst: SignPublicKey, val: string) {.async.} =
   await ns.sendCommand(RelayCommand(
     kind: SendData,
     send_dst: dst,
@@ -90,7 +90,7 @@ proc getData*(ns: NetstringClient): Future[string] {.async.} =
   else:
     raise ValueError.newException("Expecting Data but got: " & $res)
 
-proc storeChunk*(ns: NetstringClient, dsts: seq[PublicKey], key: string, val: string) {.async.} =
+proc storeChunk*(ns: NetstringClient, dsts: seq[SignPublicKey], key: string, val: string) {.async.} =
   await ns.sendCommand(RelayCommand(
     kind: StoreChunk,
     chunk_dst: dsts,
@@ -98,7 +98,7 @@ proc storeChunk*(ns: NetstringClient, dsts: seq[PublicKey], key: string, val: st
     chunk_val: val,
   ))
 
-proc getChunk*(ns: NetstringClient, src: PublicKey, key: string): Future[Option[string]] {.async.} =
+proc getChunk*(ns: NetstringClient, src: SignPublicKey, key: string): Future[Option[string]] {.async.} =
   await ns.sendCommand(RelayCommand(
     kind: GetChunks,
     chunk_src: src,
@@ -110,7 +110,7 @@ proc getChunk*(ns: NetstringClient, src: PublicKey, key: string): Future[Option[
   else:
     raise ValueError.newException("Expecting Chunk but got: " & $res)
 
-proc hasChunk*(ns: NetstringClient, src: PublicKey, key: string): Future[bool] {.async.} =
+proc hasChunk*(ns: NetstringClient, src: SignPublicKey, key: string): Future[bool] {.async.} =
   await ns.sendCommand(RelayCommand(
     kind: HasChunks,
     has_src: src,

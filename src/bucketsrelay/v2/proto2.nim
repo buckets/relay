@@ -22,18 +22,18 @@ const TESTMODE = defined(testmode) and not defined(release)
 
 type
   KeyPair* = tuple
-    pk: PublicKey
-    sk: SecretKey
+    pk: SignPublicKey
+    sk: SignSecretKey
 
   Relay*[T] = object
     db*: DbConn
-    clients: TableRef[PublicKey, RelayConnection[T]]
+    clients: TableRef[SignPublicKey, RelayConnection[T]]
     max_chunk_space*: int
     max_transfer_rate*: int
   
   RelayConnection*[T] = ref object
     sender*: T
-    pubkey*: Option[PublicKey] ## The authenticated pubkey
+    pubkey*: Option[SignPublicKey] ## The authenticated pubkey
     challenge: Option[Challenge]
     relay*: Relay[T]
     ip*: string
@@ -52,13 +52,13 @@ when TESTMODE:
 #-------------------------------------------------------------------
 proc genkeys*(): KeyPair =
   let (pk, sk) = crypto_sign_keypair()
-  result = (pk.PublicKey, sk.SecretKey)
+  result = (pk.SignPublicKey, sk.SignSecretKey)
 
-proc sign*(key: SecretKey, message: string): string =
+proc sign*(key: SignSecretKey, message: string): string =
   ## Sign a message with the given secret key
   result = crypto_sign_detached(key.string, message)
 
-proc is_valid_signature*(key: PublicKey, plaintext: string, signature: string): bool =
+proc is_valid_signature*(key: SignPublicKey, plaintext: string, signature: string): bool =
   try:
     crypto_sign_verify_detached(key.string, plaintext, signature)
     return true
@@ -99,7 +99,7 @@ proc firstBits(s: string, n: int): string =
     raise ValueError.newException("String not long enough")
   return result
 
-proc answer*(ch: Challenge, sk: SecretKey): ChallengeAnswer =
+proc answer*(ch: Challenge, sk: SignSecretKey): ChallengeAnswer =
   ## Answer a hashcash challenge and sign the result
   var nonce = 0
   let serialized = ch.serialize()
@@ -121,7 +121,7 @@ proc answer*(ch: Challenge, sk: SecretKey): ChallengeAnswer =
       )
     nonce.inc()
 
-proc is_valid_answer*(pk: PublicKey, ch: Challenge, answer: ChallengeAnswer): bool =
+proc is_valid_answer*(pk: SignPublicKey, ch: Challenge, answer: ChallengeAnswer): bool =
   ## Verify the signed challenge answer
   if not pk.is_valid_signature(sigContents(ch, answer.nonce, answer.output), answer.signature):
     return false
@@ -143,11 +143,11 @@ func strval*(dbval: sqlite.DbValue): string =
   else:
     raise ValueError.newException("Can't get string from " & $dbval.kind)
 
-proc dbValue*(p: PublicKey): DbValue =
+proc dbValue*(p: SignPublicKey): DbValue =
   dbValue(p.string.DbBlob)
 
-proc fromDB*(t: typedesc[PublicKey], v: DbBlob): PublicKey =
-  v.string.PublicKey
+proc fromDB*(t: typedesc[SignPublicKey], v: DbBlob): SignPublicKey =
+  v.string.SignPublicKey
 
 template patch(db: untyped, applied: seq[string], name: string, body: untyped): untyped =
   block:
@@ -254,7 +254,7 @@ proc `$`*[T](conn: RelayConnection[T]): string =
     result &= " cha=" & base64.encode(conn.challenge.get())
   result &= ")"
 
-proc `$`*[T](tab: TableRef[PublicKey, RelayConnection[T]]): string =
+proc `$`*[T](tab: TableRef[SignPublicKey, RelayConnection[T]]): string =
   result = "TableRef("
   for key in tab.keys():
     let val = tab[key]
@@ -265,7 +265,7 @@ proc newRelay*[T](db: DbConn): Relay[T] =
   when TESTMODE:
     resetSkew()
   result.db = db
-  result.clients = newTable[PublicKey, RelayConnection[T]]()
+  result.clients = newTable[SignPublicKey, RelayConnection[T]]()
   db.updateSchema()
 
 template sendError*[T](conn: RelayConnection[T], cmd: RelayCommand, msg: string, code: ErrorCode) =
@@ -284,13 +284,13 @@ template sendOkay*[T](conn: RelayConnection[T], cmd: RelayCommand) =
     ok_cmd: cmd.kind,
   ))
 
-proc is_valid*(x: PublicKey): bool =
+proc is_valid*(x: SignPublicKey): bool =
   ## Return true if it looks like a valid public key
   if x.string.len == 32:
     return true
   return false
 
-proc any_invalid(x: seq[PublicKey]): bool =
+proc any_invalid(x: seq[SignPublicKey]): bool =
   ## Return true if any of the public keys are invalid
   for pk in x:
     if not pk.is_valid():
@@ -322,14 +322,14 @@ type
     data_in: int
     data_out: int
     ip: string
-    pubkey: PublicKey
+    pubkey: SignPublicKey
     period: string
   
   PeriodRange* = tuple
     a: string
     b: string
 
-proc record_transfer_stat*(db: DbConn, ip: string, pubkey = "".PublicKey, data_in = 0, data_out = 0) =
+proc record_transfer_stat*(db: DbConn, ip: string, pubkey = "".SignPublicKey, data_in = 0, data_out = 0) =
   db.exec(sql"""
   INSERT INTO stats_transfer (ip, pubkey, data_in, data_out)
   VALUES (?, ?, ?, ?)
@@ -339,7 +339,7 @@ proc record_transfer_stat*(db: DbConn, ip: string, pubkey = "".PublicKey, data_i
   """, ip, pubkey, data_in, data_out)
 
 when TESTMODE:
-  proc record_transfer_stat_period*(db: DbConn, ip: string, pubkey = "".PublicKey, period = "", data_in = 0, data_out = 0) =
+  proc record_transfer_stat_period*(db: DbConn, ip: string, pubkey = "".SignPublicKey, period = "", data_in = 0, data_out = 0) =
     db.exec(sql"""
     INSERT INTO stats_transfer (ip, pubkey, period, data_in, data_out)
     VALUES (?, ?, ?, ?, ?)
@@ -348,7 +348,7 @@ when TESTMODE:
       data_out = data_out + excluded.data_out;
     """, ip, pubkey, period, data_in, data_out)
 
-proc record_event_stat*(db: DbConn, ip: string, pubkey: PublicKey, connect = 0, publish = 0, send = 0, store = 0) =
+proc record_event_stat*(db: DbConn, ip: string, pubkey: SignPublicKey, connect = 0, publish = 0, send = 0, store = 0) =
   db.exec(sql"""
   INSERT INTO stats_event (ip, pubkey, connect, publish, send, store)
   VALUES (?, ?, ?, ?, ?, ?)
@@ -359,13 +359,13 @@ proc record_event_stat*(db: DbConn, ip: string, pubkey: PublicKey, connect = 0, 
     store = store + excluded.store
   """, ip, pubkey, connect, publish, send, store)
 
-proc chunk_space_used*(db: DbConn, pubkey: PublicKey): int =
+proc chunk_space_used*(db: DbConn, pubkey: SignPublicKey): int =
   ## Return the amount of space being used by the given public key
   db.getRow(sql"""
     SELECT coalesce(sum(length(val)), 0) FROM chunk WHERE src = ?
   """, pubkey).get()[0].i.int
 
-proc current_data_in*(db: DbConn, pubkey: PublicKey): int =
+proc current_data_in*(db: DbConn, pubkey: SignPublicKey): int =
   ## Return the amount of data that has been transferred in by the given
   ## public key for the current time period
   db.getRow(sql"""
@@ -375,7 +375,7 @@ proc current_data_in*(db: DbConn, pubkey: PublicKey): int =
       AND period = strftime('%Y-%W')
   """, pubkey).get()[0].i.int
 
-proc stats_transfer_total*(db: DbConn, ip = "", pubkey = "".PublicKey, period = ""): TransferTotal =
+proc stats_transfer_total*(db: DbConn, ip = "", pubkey = "".SignPublicKey, period = ""): TransferTotal =
   var query = "SELECT sum(data_in), sum(data_out) FROM stats_transfer"
   var whereparts: seq[string]
   var params: seq[DbValue]
@@ -426,7 +426,7 @@ proc popNote(relay: Relay, topic: string): Option[string] =
     warn &"[note] error " & getCurrentExceptionMsg()
     db.exec(sql"ROLLBACK")
 
-proc noteCount(relay: Relay, pubkey: PublicKey): int =
+proc noteCount(relay: Relay, pubkey: SignPublicKey): int =
   ## Return the number of notes currently published by this ip
   relay.db.getRow(sql"SELECT count(*) FROM note WHERE src = ?", pubkey).get()[0].i.int
 
@@ -442,7 +442,7 @@ proc delExpiredMessages(relay: Relay) =
   let offstring = &"{offset} seconds"
   relay.db.exec(sql"DELETE FROM message WHERE created <= datetime('now', ?)", offstring)
 
-proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
+proc nextMessage(relay: Relay, dst: SignPublicKey): Option[RelayMessage] =
   let orow = relay.db.getRow(sql"""
     SELECT src, data, id
     FROM message
@@ -457,7 +457,7 @@ proc nextMessage(relay: Relay, dst: PublicKey): Option[RelayMessage] =
     result = some(RelayMessage(
       kind: Data,
       resp_id: 0,  # Data messages are not triggered by recipient's command
-      data_src: PublicKey.fromDB(row[0].b),
+      data_src: SignPublicKey.fromDB(row[0].b),
       data_val: row[1].b.string,
     ))
     relay.db.exec(sql"DELETE FROM message WHERE id=?", row[2].i)
@@ -644,7 +644,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
             INSERT OR REPLACE INTO chunk (last_used, src, key, val)
             VALUES (datetime('now', ?), ?, ?, ?)
             """, offset, pubkey, cmd.chunk_key.DbBlob, cmd.chunk_val.DbBlob)
-          var dsts: seq[PublicKey]
+          var dsts: seq[SignPublicKey]
           dsts.add(cmd.chunk_dst)
           if pubkey notin dsts:
             dsts.add(pubkey)

@@ -21,8 +21,8 @@ else:
 type
   TestClient* = ref object
     received: Deque[RelayMessage]
-    pk: PublicKey
-    sk: SecretKey
+    pk: SignPublicKey
+    sk: SignSecretKey
 
 proc `$`*(tc: TestClient): string = $tc[]
 
@@ -63,8 +63,8 @@ proc pop(conn: var RelayConnection[TestClient], expected: MessageKind): RelayMes
 proc msgCount(conn: var RelayConnection[TestClient]): int =
   conn.sender.received.len
 
-proc pk(conn: var RelayConnection[TestClient]): PublicKey = conn.sender.pk
-proc sk(conn: var RelayConnection[TestClient]): SecretKey = conn.sender.sk
+proc pk(conn: var RelayConnection[TestClient]): SignPublicKey = conn.sender.pk
+proc sk(conn: var RelayConnection[TestClient]): SignSecretKey = conn.sender.sk
 proc keys(conn: var RelayConnection[TestClient]): KeyPair = (conn.sender.pk, conn.sender.sk)
 
 proc anonConn(relay: Relay): RelayConnection[TestClient] =
@@ -494,7 +494,7 @@ suite "data":
     var alice = relay.authenticatedConn()
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
-      send_dst: "invalid".PublicKey,
+      send_dst: "invalid".SignPublicKey,
       send_val: "a",
     ))
     let err = alice.pop(Error)
@@ -502,7 +502,7 @@ suite "data":
     check err.err_cmd == SendData
 
 
-proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[PublicKey]()) =
+proc storeChunk(conn: var RelayConnection[TestClient], key: string, val: string, dst = newSeq[SignPublicKey]()) =
   conn.relay.handleCommand(conn, RelayCommand(
     kind: StoreChunk,
     chunk_dst: dst,
@@ -707,7 +707,7 @@ suite "chunks":
   test "max dst.len":
     let relay = testRelay()
     var alice = relay.authenticatedConn()
-    var dsts: seq[PublicKey]
+    var dsts: seq[SignPublicKey]
     for i in 0..(RELAY_MAX_CHUNK_DSTS+1):
       dsts.add(genkeys().pk)
     relay.handleCommand(alice, RelayCommand(
@@ -748,7 +748,7 @@ suite "chunks":
     var alice = relay.authenticatedConn()
     relay.handleCommand(alice, RelayCommand(
       kind: StoreChunk,
-      chunk_dst: @["fake".PublicKey],
+      chunk_dst: @["fake".SignPublicKey],
       chunk_key: "a",
       chunk_val: "b",
     ))
@@ -831,25 +831,25 @@ suite "stats":
   test "transfer basics":
     let db = open(":memory:", "", "", "")
     db.updateSchema()
-    db.record_transfer_stat("ip1", "pubkey".PublicKey, data_in = 1000, data_out = 500)
-    db.record_transfer_stat("ip1", "pubkey".PublicKey, data_in = 2000, data_out = 250)
-    db.record_transfer_stat("ip2", "pubkey".PublicKey, data_in = 3000, data_out = 100)
-    db.record_transfer_stat("ip1", "pubkey2".PublicKey, data_in = 500, data_out = 100)
+    db.record_transfer_stat("ip1", "pubkey".SignPublicKey, data_in = 1000, data_out = 500)
+    db.record_transfer_stat("ip1", "pubkey".SignPublicKey, data_in = 2000, data_out = 250)
+    db.record_transfer_stat("ip2", "pubkey".SignPublicKey, data_in = 3000, data_out = 100)
+    db.record_transfer_stat("ip1", "pubkey2".SignPublicKey, data_in = 500, data_out = 100)
 
-    check db.stats_transfer_total(ip="ip1") == (1000+2000+500, 500+250+100, "ip1", "".PublicKey, "")
-    check db.stats_transfer_total(pubkey="pubkey".PublicKey) == (1000+2000+3000, 500+250+100, "", "pubkey".PublicKey, "")
-    check db.stats_transfer_total(pubkey="pubkey2".PublicKey) == (500, 100, "", "pubkey2".PublicKey, "")
+    check db.stats_transfer_total(ip="ip1") == (1000+2000+500, 500+250+100, "ip1", "".SignPublicKey, "")
+    check db.stats_transfer_total(pubkey="pubkey".SignPublicKey) == (1000+2000+3000, 500+250+100, "", "pubkey".SignPublicKey, "")
+    check db.stats_transfer_total(pubkey="pubkey2".SignPublicKey) == (500, 100, "", "pubkey2".SignPublicKey, "")
 
   test "transfer timeperiods":
     let db = open(":memory:", "", "", "")
     db.updateSchema()
-    db.record_transfer_stat_period("ip1", "pubkey".PublicKey, "2010-01", data_in = 1000, data_out = 500)
-    db.record_transfer_stat_period("ip1", "pubkey".PublicKey, "2010-01", data_in = 2000, data_out = 250)
-    db.record_transfer_stat_period("ip2", "pubkey".PublicKey, "2010-02", data_in = 3000, data_out = 100)
-    db.record_transfer_stat_period("ip1", "pubkey2".PublicKey, "2010-02", data_in = 500, data_out = 100)
+    db.record_transfer_stat_period("ip1", "pubkey".SignPublicKey, "2010-01", data_in = 1000, data_out = 500)
+    db.record_transfer_stat_period("ip1", "pubkey".SignPublicKey, "2010-01", data_in = 2000, data_out = 250)
+    db.record_transfer_stat_period("ip2", "pubkey".SignPublicKey, "2010-02", data_in = 3000, data_out = 100)
+    db.record_transfer_stat_period("ip1", "pubkey2".SignPublicKey, "2010-02", data_in = 500, data_out = 100)
 
-    check db.stats_transfer_total(period="2010-01") == (1000+2000, 500+250, "", "".PublicKey, "2010-01")
-    check db.stats_transfer_total(period="2010-02") == (3000+500, 100+100, "", "".PublicKey, "2010-02")
+    check db.stats_transfer_total(period="2010-01") == (1000+2000, 500+250, "", "".SignPublicKey, "2010-01")
+    check db.stats_transfer_total(period="2010-02") == (3000+500, 100+100, "", "".SignPublicKey, "2010-02")
 
 suite "resp_id":
 

@@ -22,7 +22,7 @@ type
     buf: string
     socket: WebSocket
     ip: string
-    pubkey: Option[PublicKey]
+    pubkey: Option[SignPublicKey]
   
   QueuedMessage = tuple
     socket: NetstringSocket
@@ -140,13 +140,13 @@ proc handleWebsocket(req: Request) {.async, gcsafe.} =
 
 type
   StorageStat = tuple
-    pubkey: PublicKey
+    pubkey: SignPublicKey
     message_size: int
     chunk_size: int
     total_size: int
   
   PubkeyEventStat = tuple
-    pubkey: PublicKey
+    pubkey: SignPublicKey
     count: int
   
   IPEventStat = tuple
@@ -227,7 +227,7 @@ router myrouter:
         data_in: row[0].i.int,
         data_out: row[1].i.int,
         ip: row[3].s,
-        pubkey: default(PublicKey),
+        pubkey: default(SignPublicKey),
         period: "",
       ))
     
@@ -252,7 +252,7 @@ router myrouter:
         data_in: row[0].i.int,
         data_out: row[1].i.int,
         ip: "",
-        pubkey: PublicKey.fromDB(row[3].b),
+        pubkey: SignPublicKey.fromDB(row[3].b),
         period: "",
       ))
     
@@ -281,7 +281,7 @@ router myrouter:
         LIMIT 10;
       """):
         storage_by_pubkey.add((
-          pubkey: PublicKey.fromDb(row[0].b),
+          pubkey: SignPublicKey.fromDb(row[0].b),
           message_size: row[1].i.int,
           chunk_size: row[2].i.int,
           total_size: row[3].i.int,
@@ -303,7 +303,7 @@ router myrouter:
       LIMIT 10
     """, datarange.a):
       connects_by_pubkey.add((
-        pubkey: PublicKey.fromDb(row[0].b),
+        pubkey: SignPublicKey.fromDb(row[0].b),
         count: row[1].i.int,
       ))
     
@@ -322,7 +322,7 @@ router myrouter:
       LIMIT 10
     """, datarange.a):
       publish_by_pubkey.add((
-        pubkey: PublicKey.fromDb(row[0].b),
+        pubkey: SignPublicKey.fromDb(row[0].b),
         count: row[1].i.int,
       ))
     
@@ -341,7 +341,7 @@ router myrouter:
       LIMIT 10
     """, datarange.a):
       send_by_pubkey.add((
-        pubkey: PublicKey.fromDb(row[0].b),
+        pubkey: SignPublicKey.fromDb(row[0].b),
         count: row[1].i.int,
       ))
     
@@ -360,7 +360,7 @@ router myrouter:
       LIMIT 10
     """, datarange.a):
       store_by_pubkey.add((
-        pubkey: PublicKey.fromDb(row[0].b),
+        pubkey: SignPublicKey.fromDb(row[0].b),
         count: row[1].i.int,
       ))
 
