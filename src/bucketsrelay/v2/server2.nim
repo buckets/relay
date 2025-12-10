@@ -29,9 +29,11 @@ type
     msg: RelayMessage
 
 const
-  VERSION = slurp"../CHANGELOG.md".split(" ")[1]
+  RELAY_VERSION = slurp"../../../CHANGELOG.md".split(" ")[1]
   logo_png = slurp"./static/logo.png"
   favicon_png = slurp"./static/favicon.png"
+
+echo "RELAY_VERSION: ", RELAY_VERSION
 
 let ADMIN_USERNAME = getEnv("ADMIN_USERNAME", "admin")
 let ADMIN_PWHASH = when defined(release):
@@ -141,9 +143,7 @@ proc handleWebsocket(req: Request) {.async, gcsafe.} =
 type
   StorageStat = tuple
     pubkey: SignPublicKey
-    message_size: int
-    chunk_size: int
-    total_size: int
+    size: int
   
   PubkeyEventStat = tuple
     pubkey: SignPublicKey
@@ -200,12 +200,10 @@ router myrouter:
     
     # total stored
     let total_stored_note = relay.db.getRow(sql"SELECT coalesce(sum(length(data)), 0) FROM note").get()[0].i
-    let total_stored_message = relay.db.getRow(sql"SELECT coalesce(sum(length(data)), 0) FROM message").get()[0].i
-    let total_stored_chunk = relay.db.getRow(sql"SELECT coalesce(sum(length(val)), 0) FROM chunk").get()[0].i
-    let total_stored = total_stored_note + total_stored_message + total_stored_chunk
+    let total_stored_message = relay.db.getRow(sql"SELECT sum(coalesce(length(data), 0) + coalesce(length(key), 0)) FROM message").get()[0].i
+    let total_stored = total_stored_note + total_stored_message
     let num_note = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM note").get()[0].i
     let num_message = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM message").get()[0].i
-    let num_chunk = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM chunk").get()[0].i
 
     # top traffic by ip
     var traffic_by_ip: seq[TransferTotal]
@@ -259,32 +257,19 @@ router myrouter:
     # top storage by pubkey
     var storage_by_pubkey: seq[StorageStat]
     for row in relay.db.getAllRows(sql"""
-        WITH msg AS (
-            SELECT src, SUM(coalesce(LENGTH(data), 0)) AS msg_bytes
-            FROM message
-            GROUP BY src
-        ),
-        chunksize AS (
-            SELECT src, SUM(coalesce(LENGTH(val), 0)) AS chunk_bytes
-            FROM chunk
-            GROUP BY src
-        )
         SELECT
-            COALESCE(m.src, c.src)               AS src,
-            COALESCE(m.msg_bytes, 0)             AS msg_bytes,
-            COALESCE(c.chunk_bytes, 0)           AS chunk_bytes,
-            COALESCE(m.msg_bytes, 0) + COALESCE(c.chunk_bytes, 0) AS total_bytes
-        FROM msg   AS m
-        FULL OUTER JOIN chunksize AS c
-            ON m.src = c.src
-        ORDER BY total_bytes DESC
-        LIMIT 10;
+          src,
+          SUM(COALESCE(LENGTH(data), 0) + COALESCE(LENGTH(key), 0)) AS msg_bytes
+        FROM
+          message
+        GROUP BY
+          src
+        ORDER BY 2 DESC
+        LIMIT 10
       """):
         storage_by_pubkey.add((
           pubkey: SignPublicKey.fromDb(row[0].b),
-          message_size: row[1].i.int,
-          chunk_size: row[2].i.int,
-          total_size: row[3].i.int,
+          size: row[1].i.int,
         ))
     
     # top events by pubkey
@@ -341,25 +326,6 @@ router myrouter:
       LIMIT 10
     """, datarange.a):
       send_by_pubkey.add((
-        pubkey: SignPublicKey.fromDb(row[0].b),
-        count: row[1].i.int,
-      ))
-    
-    var store_by_pubkey: seq[PubkeyEventStat]
-    for row in relay.db.getAllRows(sql"""
-      SELECT
-        pubkey,
-        COALESCE(SUM(store), 0)
-      FROM
-        stats_event
-      WHERE
-        period >= ?
-        AND pubkey <> ''
-      GROUP BY 1
-      ORDER BY 2 DESC
-      LIMIT 10
-    """, datarange.a):
-      store_by_pubkey.add((
         pubkey: SignPublicKey.fromDb(row[0].b),
         count: row[1].i.int,
       ))

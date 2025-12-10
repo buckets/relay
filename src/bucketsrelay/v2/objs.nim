@@ -7,7 +7,7 @@
 ## This file should be kept free of dependencies other than the stdlib
 ## and should not include async stuff
 ## as it's meant to be referenced by outside libraries that may
-## want to do things there own way.
+## want to do things their own way.
 
 import std/hashes
 import std/options
@@ -36,8 +36,6 @@ type
     Error
     Note
     Data
-    Chunk
-    ChunkStatus
 
   ErrorCode* = enum
     Generic = 0
@@ -63,25 +61,15 @@ type
       note_topic*: string
       note_data*: string
     of Data:
+      data_key*: string
       data_src*: SignPublicKey
       data_val*: string
-    of Chunk:
-      chunk_src*: SignPublicKey
-      chunk_key*: string
-      chunk_val*: Option[string]
-    of ChunkStatus:
-      status_src*: SignPublicKey
-      present*: seq[string]
-      absent*: seq[string]
 
   CommandKind* = enum
     Iam
     PublishNote
     FetchNote
     SendData
-    StoreChunk
-    GetChunks
-    HasChunks
 
   RelayCommand* = object
     resp_id*: int
@@ -95,30 +83,18 @@ type
     of FetchNote:
       fetch_topic*: string
     of SendData:
-      send_dst*: SignPublicKey
+      send_key*: string
+      send_dst*: seq[SignPublicKey]
       send_val*: string
-    of StoreChunk:
-      chunk_dst*: seq[SignPublicKey]
-      chunk_key*: string
-      chunk_val*: string
-    of GetChunks:
-      chunk_src*: SignPublicKey
-      chunk_keys*: seq[string]
-    of HasChunks:
-      has_src*: SignPublicKey
-      has_keys*: seq[string]
 
 const
   RELAY_MAX_TOPIC_SIZE* = 512
-  RELAY_MAX_NOTE_SIZE* = 4096
+  RELAY_MAX_NOTE_SIZE* = 4096 * 2
   RELAY_MAX_NOTES* = 1000
   RELAY_NOTE_DURATION* = 5 * 24 * 60 * 60
-  RELAY_MAX_MESSAGE_SIZE* = 4096
-  RELAY_MAX_CHUNK_KEY_SIZE* = 4096
-  RELAY_MAX_CHUNK_SIZE* = 65536
-  RELAY_MAX_CHUNK_DSTS* = 32
+  RELAY_MAX_MESSAGE_SIZE* = 65536 * 2
+  RELAY_MAX_KEY_SIZE* = 4096
   RELAY_MESSAGE_DURATION* = 30 * 24 * 60 * 60
-  RELAY_PUBKEY_MEMORY_SECONDS* = 60 * 24 * 60 * 60
 
 const
   nicestart = 'a' # '!'
@@ -175,17 +151,9 @@ proc `$`*(msg: RelayMessage): string =
   of Error:
     result.add &"cmd={msg.err_cmd} code={msg.err_code} msg={msg.err_message.nice}"
   of Note:
-    result.add &"'{msg.note_topic.nice}' val={msg.note_data.nicelong}"
+    result.add &"'{msg.note_topic.nice.abbr}' val={msg.note_data.nicelong}"
   of Data:
-    result.add &"{msg.data_src.nice.abbr} val={msg.data_val.nicelong}"
-  of Chunk:
-    result.add &"{msg.chunk_src.nice.abbr} {msg.chunk_key.nice.abbr}={msg.chunk_val.nicelong}"
-  of ChunkStatus:
-    result.add &"{msg.status_src.nice.abbr} present=["
-    result.add msg.present.mapIt(it.nice.abbr).join(", ")
-    result.add "] absent=["
-    result.add msg.absent.mapIt(it.nice.abbr).join(", ")
-    result.add "]"
+    result.add &"'{msg.data_key.nice.abbr}' src={msg.data_src.nice.abbr} val={msg.data_val.nicelong}"
   result.add ")"
 
 proc `==`*(a, b: RelayMessage): bool =
@@ -202,11 +170,7 @@ proc `==`*(a, b: RelayMessage): bool =
     of Note:
       return a.note_data == b.note_data and a.note_topic == b.note_topic
     of Data:
-      return a.data_src == b.data_src and a.data_val == b.data_val
-    of Chunk:
-      return a.chunk_src == b.chunk_src and a.chunk_key == b.chunk_key and a.chunk_val == b.chunk_val
-    of ChunkStatus:
-      return a.status_src == b.status_src and a.present == b.present and a.absent == b.absent
+      return a.data_src == b.data_src and a.data_val == b.data_val and a.data_key == b.data_key
 
 proc `$`*(cmd: RelayCommand): string =
   result.add $cmd.kind & "("
@@ -218,19 +182,8 @@ proc `$`*(cmd: RelayCommand): string =
   of FetchNote:
     result.add &"'{cmd.fetch_topic.nice.abbr}'"
   of SendData:
-    result.add &"{cmd.send_dst.nice.abbr} val={cmd.send_val.nicelong}"
-  of StoreChunk:
-    result.add &"{cmd.chunk_key.nice.abbr}={cmd.chunk_val.nicelong} dst=["
-    result.add cmd.chunk_dst.mapIt(it.nice.abbr).join(", ")
-    result.add "]"
-  of GetChunks:
-    result.add &"{cmd.chunk_src.nice.abbr} keys=["
-    result.add cmd.chunk_keys.mapIt(it.nice.abbr).join(", ")
-    result.add "]"
-  of HasChunks:
-    result.add &"{cmd.has_src.nice.abbr} keys=["
-    result.add cmd.has_keys.mapIt(it.nice.abbr).join(", ")
-    result.add "]"
+    result.add &"key={cmd.send_key.nice.abbr} val={cmd.send_val.nicelong} "
+    result.add cmd.send_dst.mapIt(it.nice.abbr).join(", ")
   result.add ")"
 
 proc `==`*(a, b: RelayCommand): bool =
@@ -245,13 +198,7 @@ proc `==`*(a, b: RelayCommand): bool =
     of FetchNote:
       return a.fetch_topic == b.fetch_topic
     of SendData:
-      return a.send_dst == b.send_dst and a.send_val == b.send_val
-    of StoreChunk:
-      return a.chunk_dst == b.chunk_dst and a.chunk_key == b.chunk_key and a.chunk_val == b.chunk_val
-    of GetChunks:
-      return a.chunk_src == b.chunk_src and a.chunk_keys == b.chunk_keys
-    of HasChunks:
-      return a.has_src == b.has_src and a.has_keys == b.has_keys
+      return a.send_dst == b.send_dst and a.send_val == b.send_val and a.send_key == b.send_key
 
 #--------------------------------------------------------------
 # serialization
@@ -331,8 +278,6 @@ proc serialize*(kind: MessageKind): char =
   of Error: '-'
   of Note: 'n'
   of Data: 'd'
-  of Chunk: 'k'
-  of ChunkStatus: 's'
 
 proc deserialize*(kind: typedesc[MessageKind], val: char): MessageKind =
   case val
@@ -341,8 +286,6 @@ proc deserialize*(kind: typedesc[MessageKind], val: char): MessageKind =
   of '-': Error
   of 'n': Note
   of 'd': Data
-  of 'k': Chunk
-  of 's': ChunkStatus
   else: raise ValueError.newException("Unknown MessageKind: " & val)
 
 proc serialize*(kind: CommandKind): char =
@@ -351,9 +294,6 @@ proc serialize*(kind: CommandKind): char =
   of PublishNote: 'p'
   of FetchNote: 'f'
   of SendData: 's'
-  of StoreChunk: 'c'
-  of GetChunks: 'g'
-  of HasChunks: 't'
 
 proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   case val:
@@ -361,9 +301,6 @@ proc deserialize*(kind: typedesc[CommandKind], val: char): CommandKind =
   of 'p': PublishNote
   of 'f': FetchNote
   of 's': SendData
-  of 'c': StoreChunk
-  of 'g': GetChunks
-  of 't': HasChunks
   else: raise ValueError.newException("Unknown CommandKind: " & val)
 
 proc serialize*(err: ErrorCode): char =
@@ -438,18 +375,9 @@ proc serialize*(msg: RelayMessage): string =
     result &= msg.note_topic.nsencode
     result &= msg.note_data.nsencode
   of Data:
+    result &= msg.data_key.nsencode
     result &= msg.data_src.string.nsencode
     result &= msg.data_val.nsencode
-  of Chunk:
-    result &= msg.chunk_src.string.nsencode
-    result &= msg.chunk_key.nsencode
-    if msg.chunk_val.isSome:
-      result &= msg.chunk_val.get().nsencode
-  of ChunkStatus:
-    result &= msg.status_src.string.nsencode
-    result &= nsencode(msg.present.serialize())
-    result &= nsencode(msg.absent.serialize())
-
 
 proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
   if s.len == 0:
@@ -486,27 +414,9 @@ proc deserialize*(typ: typedesc[RelayMessage], s: string): RelayMessage =
     return RelayMessage(
       kind: Data,
       resp_id: resp_id,
+      data_key: s.nsdecode(idx),
       data_src: s.nsdecode(idx).SignPublicKey,
       data_val: s.nsdecode(idx),
-    )
-  of Chunk:
-    return RelayMessage(
-      kind: Chunk,
-      resp_id: resp_id,
-      chunk_src: s.nsdecode(idx).SignPublicKey,
-      chunk_key: s.nsdecode(idx),
-      chunk_val: if idx >= s.len:
-          none[string]()
-        else:
-          some(s.nsdecode(idx)),
-    )
-  of ChunkStatus:
-    return RelayMessage(
-      kind: ChunkStatus,
-      resp_id: resp_id,
-      status_src: s.nsdecode(idx).SignPublicKey,
-      present: deserialize(seq[string], s.nsdecode(idx)),
-      absent: deserialize(seq[string], s.nsdecode(idx)),
     )
 
 proc serialize*(cmd: RelayCommand): string =
@@ -522,18 +432,9 @@ proc serialize*(cmd: RelayCommand): string =
   of FetchNote:
     result &= cmd.fetch_topic.nsencode
   of SendData:
-    result &= cmd.send_dst.string.nsencode
+    result &= cmd.send_key.nsencode
+    result &= nsencode(cmd.send_dst.serialize())
     result &= cmd.send_val.nsencode
-  of StoreChunk:
-    result &= nsencode(cmd.chunk_dst.serialize())
-    result &= cmd.chunk_key.nsencode
-    result &= cmd.chunk_val.nsencode
-  of GetChunks:
-    result &= cmd.chunk_src.string.nsencode
-    result &= nsencode(cmd.chunk_keys.serialize())
-  of HasChunks:
-    result &= cmd.has_src.string.nsencode
-    result &= nsencode(cmd.has_keys.serialize())
 
 proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
   if s.len == 0:
@@ -567,28 +468,7 @@ proc deserialize*(typ: typedesc[RelayCommand], s: string): RelayCommand =
     return RelayCommand(
       kind: SendData,
       resp_id: resp_id,
-      send_dst: s.nsdecode(idx).SignPublicKey,
+      send_key: s.nsdecode(idx),
+      send_dst: deserializePubKeys(s.nsdecode(idx)),
       send_val: s.nsdecode(idx),
-    )
-  of StoreChunk:
-    return RelayCommand(
-      kind: StoreChunk,
-      resp_id: resp_id,
-      chunk_dst: deserializePubKeys(s.nsdecode(idx)),
-      chunk_key: s.nsdecode(idx),
-      chunk_val: s.nsdecode(idx),
-    )
-  of GetChunks:
-    return RelayCommand(
-      kind: GetChunks,
-      resp_id: resp_id,
-      chunk_src: s.nsdecode(idx).SignPublicKey,
-      chunk_keys: deserialize(seq[string], s.nsdecode(idx)),
-    )
-  of HasChunks:
-    return RelayCommand(
-      kind: HasChunks,
-      resp_id: resp_id,
-      has_src: s.nsdecode(idx).SignPublicKey,
-      has_keys: deserialize(seq[string], s.nsdecode(idx)),
     )
