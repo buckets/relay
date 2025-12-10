@@ -41,11 +41,11 @@
         Buckets Relay
       </h1>
       <div style="text-align: center;">
-        {{ VERSION }}
+        {{ RELAY_VERSION }}
       </div>
 
       <p>
-        If you use <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a>, this relay lets you securely share your budget among your devices. Data is stored on this relay for a time, but is removed after periods of inactivity. All data passing through this relay is encrypted end-to-end.
+        If you use <a href="https://www.budgetwithbuckets.com" target="_blank">Buckets</a>, this relay lets you securely share your budget among your devices. Data is stored until recipients receive it or it expires. All data passing through this relay is encrypted end-to-end.
       </p>
 
       <p>

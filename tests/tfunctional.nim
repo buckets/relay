@@ -84,8 +84,8 @@ suite "auth":
     var alice = testClient(keys)
     var alice2 = testClient(keys)
     var bob = testClient()
-    waitFor bob.sendData(keys.pk, "this is bob")
-    check (waitFor alice2.getData()) == "this is bob"
+    waitFor bob.sendData(@[keys.pk], "this is bob", "")
+    check (waitFor alice2.getData()) == ("", "this is bob")
 
 suite "publishnote":
 
@@ -112,47 +112,24 @@ suite "data":
     var bkeys = genkeys()
     var alice = testClient(akeys)
     var bob = testClient(bkeys)
-    waitFor alice.sendData(bkeys.pk, "hey, bob?")
-    check (waitFor bob.getData()) == "hey, bob?"
-    waitFor bob.sendData(akeys.pk, "hi, alice!")
-    check (waitFor alice.getData()) == "hi, alice!"
+    waitFor alice.sendData(@[bkeys.pk], "hey, bob?", "")
+    check (waitFor bob.getData()) == ("", "hey, bob?")
+    waitFor bob.sendData(@[akeys.pk], "hi, alice!", "hey")
+    check (waitFor alice.getData()) == ("hey", "hi, alice!")
   
   test "offline":
     var akeys = genkeys()
     var bkeys = genkeys()
     var alice = testClient(akeys)
-    waitFor alice.sendData(bkeys.pk, "message \x01")
-    waitFor alice.sendData(bkeys.pk, "message \x02")
-    waitFor alice.sendData(bkeys.pk, "message \x00null")
+    waitFor alice.sendData(@[bkeys.pk], "message \x01", "")
+    waitFor alice.sendData(@[bkeys.pk], "message \x02", "")
+    waitFor alice.sendData(@[bkeys.pk], "message \x00null", "")
 
     var bob = testClient(bkeys)
-    check (waitFor bob.getData()) == "message \x01"
-    check (waitFor bob.getData()) == "message \x02"
-    check (waitFor bob.getData()) == "message \x00null"
+    check (waitFor bob.getData()) == ("", "message \x01")
+    check (waitFor bob.getData()) == ("", "message \x02")
+    check (waitFor bob.getData()) == ("", "message \x00null")
 
-suite "chunks":
-
-  test "basic":
-    var akeys = genkeys()
-    var bkeys = genkeys()
-    var ckeys = genkeys()
-    var alice = testClient(akeys)
-    var bob = testClient(bkeys)
-    var carl = testClient(ckeys)
-    waitFor alice.storeChunk(@[bkeys.pk], "chunk1", "data1")
-    waitFor alice.storeChunk(@[bkeys.pk, ckeys.pk], "chunk2", "data2")
-    waitFor alice.storeChunk(@[bkeys.pk], "chunk3", "data3")
-    waitFor alice.storeChunk(@[bkeys.pk], "chunk3", "data3updated")
-
-    check (waitFor bob.getChunk(akeys.pk, "chunk1")) == some("data1")
-    check (waitFor bob.getChunk(akeys.pk, "chunk2")) == some("data2")
-    check (waitFor bob.getChunk(akeys.pk, "chunk3")) == some("data3updated")
-    check (waitFor bob.getChunk(akeys.pk, "chunk4")).isNone()
-
-    check (waitFor carl.getChunk(akeys.pk, "chunk1")).isNone()
-    check (waitFor carl.getChunk(akeys.pk, "chunk2")) == some("data2")
-    check (waitFor carl.getChunk(akeys.pk, "chunk3")).isNone()
-    check (waitFor carl.getChunk(akeys.pk, "chunk4")).isNone()
 
 suite "invalid":
   

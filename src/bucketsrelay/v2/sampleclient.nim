@@ -76,48 +76,17 @@ proc fetchNote*(ns: NetstringClient, topic: string): Future[string] {.async.} =
   else:
     raise ValueError.newException("No such note: " & topic)
 
-proc sendData*(ns: NetstringClient, dst: SignPublicKey, val: string) {.async.} =
+proc sendData*(ns: NetstringClient, dst: seq[SignPublicKey], val: string, key: string) {.async.} =
   await ns.sendCommand(RelayCommand(
     kind: SendData,
+    send_key: key,
     send_dst: dst,
     send_val: val,
   ))
 
-proc getData*(ns: NetstringClient): Future[string] {.async.} =
+proc getData*(ns: NetstringClient): Future[tuple[key: string, val: string]] {.async.} =
   let res = await ns.receiveMessage()
   if res.kind == Data:
-    return res.data_val
+    return (res.data_key, res.data_val)
   else:
     raise ValueError.newException("Expecting Data but got: " & $res)
-
-proc storeChunk*(ns: NetstringClient, dsts: seq[SignPublicKey], key: string, val: string) {.async.} =
-  await ns.sendCommand(RelayCommand(
-    kind: StoreChunk,
-    chunk_dst: dsts,
-    chunk_key: key,
-    chunk_val: val,
-  ))
-
-proc getChunk*(ns: NetstringClient, src: SignPublicKey, key: string): Future[Option[string]] {.async.} =
-  await ns.sendCommand(RelayCommand(
-    kind: GetChunks,
-    chunk_src: src,
-    chunk_keys: @[key],
-  ))
-  let res = await ns.receiveMessage()
-  if res.kind == Chunk:
-    return res.chunk_val
-  else:
-    raise ValueError.newException("Expecting Chunk but got: " & $res)
-
-proc hasChunk*(ns: NetstringClient, src: SignPublicKey, key: string): Future[bool] {.async.} =
-  await ns.sendCommand(RelayCommand(
-    kind: HasChunks,
-    has_src: src,
-    has_keys: @[key],
-  ))
-  let res = await ns.receiveMessage()
-  if res.kind == ChunkStatus:
-    return key in res.present
-  else:
-    raise ValueError.newException("Expecting ChunkStatus but got: " & $res)

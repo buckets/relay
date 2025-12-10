@@ -115,48 +115,22 @@ proc doCommand(client: NetstringClient, full: seq[string], ctx: var CmdContext) 
     if dst.string == "":
       dst = SignPublicKey.deserialize(i.use(args))
     let val = i.use(args)
-    waitFor client.sendData(dst, val)
+    let key = if i < args.len:
+        i.use(args)
+      else:
+        ""
+    waitFor client.sendData(@[dst], val, key)
   of "recv":
     let data = waitFor client.getData()
     echo data
-  of "store":
-    var dst = ctx.dst
-    if dst.string == "" or args.len >= 3:
-      dst = SignPublicKey.deserialize(i.use(args))
-      echo "Using key=" & dst.nice
-    let key = i.use(args)
-    let val = i.use(args)
-    waitFor client.storeChunk(@[dst], key, val)
-  of "get":
-    var src = ctx.dst
-    if src.string == "" or args.len >= 2:
-      src = SignPublicKey.deserialize(i.use(args))
-      echo "Using key=" & src.serialize
-    let key = i.use(args)
-    let odata = waitFor client.getChunk(src, key)
-    if odata.isSome:
-      echo odata.get()
-    else:
-      echo "(none)"
-  of "has":
-    var src = ctx.dst
-    if src.string == "" or args.len >= 2:
-      src = SignPublicKey.deserialize(i.use(args))
-      echo "Using key=" & src.serialize
-    let key = i.use(args)
-    let res = waitFor client.hasChunk(src, key)
-    echo $res
   of "help":
     echo """
   post TOPIC DATA
   fetch TOPIC
   dst PUBKEY
-    Set the destination PUBKEY for future commands
-  send [PUBKEY] DATA
+    Set the destination PUBKEY for future sends
+  send [PUBKEY] DATA [KEY]
   recv
-  store [PUBKEY] KEY VAL
-  get [PUBKEY] KEY
-  has [PUBKEY] KEY
   help
     """
   else:

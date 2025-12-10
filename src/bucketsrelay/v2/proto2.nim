@@ -17,7 +17,7 @@ import libsodium/sodium_sizes
 
 import ./objs; export objs
 
-const LOG_COMMS* = not defined(release)
+const LOG_COMMS* = not defined(release) or defined(relaynologcomms)
 const TESTMODE = defined(testmode) and not defined(release)
 
 type
@@ -196,29 +196,16 @@ proc updateSchema*(db: DbConn) =
     db.exec(sql"""CREATE TABLE message (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      key BLOB NOT NULL,
       src TEXT NOT NULL,
       dst TEXT NOT NULL,
       data BLOB NOT NULL
     )""")
     db.exec(sql"CREATE INDEX message_created ON message(created)")
-    db.exec(sql"CREATE INDEX message_dst ON message(dst)")
-    
-    # chunks
-    db.exec(sql"""CREATE TABLE chunk (
-      src TEXT NOT NULL,
-      key TEXT NOT NULL,
-      last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      val BLOB NOT NULL,
-      PRIMARY KEY (src, key)
-    )""")
-    db.exec(sql"CREATE INDEX chunk_last_used ON chunk(last_used)")
-    db.exec(sql"""CREATE TABLE chunk_dst (
-      src TEXT NOT NULL,
-      key TEXT NOT NULL,
-      dst TEXT NOT NULL,
-      PRIMARY KEY (src, key, dst),
-      FOREIGN KEY (src, key) REFERENCES chunk(src, key) ON DELETE CASCADE
-    )""")
+    db.exec(sql"""CREATE UNIQUE INDEX message_dst_key
+      ON message(dst, key)
+      WHERE key IS NOT x''
+    """)
 
     # stats
     db.exec(sql"""CREATE TABLE stats_transfer (
@@ -237,7 +224,6 @@ proc updateSchema*(db: DbConn) =
       connect INTEGER DEFAULT 0,
       publish INTEGER DEFAULT 0,
       send INTEGER DEFAULT 0,
-      store INTEGER DEFAULT 0,
       PRIMARY KEY (period, ip, pubkey)
     )""")
 
@@ -348,22 +334,15 @@ when TESTMODE:
       data_out = data_out + excluded.data_out;
     """, ip, pubkey, period, data_in, data_out)
 
-proc record_event_stat*(db: DbConn, ip: string, pubkey: SignPublicKey, connect = 0, publish = 0, send = 0, store = 0) =
+proc record_event_stat*(db: DbConn, ip: string, pubkey: SignPublicKey, connect = 0, publish = 0, send = 0) =
   db.exec(sql"""
-  INSERT INTO stats_event (ip, pubkey, connect, publish, send, store)
-  VALUES (?, ?, ?, ?, ?, ?)
+  INSERT INTO stats_event (ip, pubkey, connect, publish, send)
+  VALUES (?, ?, ?, ?, ?)
   ON CONFLICT(period, ip, pubkey) DO UPDATE SET
     connect = connect + excluded.connect,
     publish = publish + excluded.publish,
-    send = send + excluded.send,
-    store = store + excluded.store
-  """, ip, pubkey, connect, publish, send, store)
-
-proc chunk_space_used*(db: DbConn, pubkey: SignPublicKey): int =
-  ## Return the amount of space being used by the given public key
-  db.getRow(sql"""
-    SELECT coalesce(sum(length(val)), 0) FROM chunk WHERE src = ?
-  """, pubkey).get()[0].i.int
+    send = send + excluded.send
+  """, ip, pubkey, connect, publish, send)
 
 proc current_data_in*(db: DbConn, pubkey: SignPublicKey): int =
   ## Return the amount of data that has been transferred in by the given
@@ -444,7 +423,7 @@ proc delExpiredMessages(relay: Relay) =
 
 proc nextMessage(relay: Relay, dst: SignPublicKey): Option[RelayMessage] =
   let orow = relay.db.getRow(sql"""
-    SELECT src, data, id
+    SELECT key, src, data, id
     FROM message
     WHERE
       dst = ?
@@ -457,10 +436,11 @@ proc nextMessage(relay: Relay, dst: SignPublicKey): Option[RelayMessage] =
     result = some(RelayMessage(
       kind: Data,
       resp_id: 0,  # Data messages are not triggered by recipient's command
-      data_src: SignPublicKey.fromDB(row[0].b),
-      data_val: row[1].b.string,
+      data_key: row[0].b.string,
+      data_src: SignPublicKey.fromDB(row[1].b),
+      data_val: row[2].b.string,
     ))
-    relay.db.exec(sql"DELETE FROM message WHERE id=?", row[2].i)
+    relay.db.exec(sql"DELETE FROM message WHERE id=?", row[3].i)
 
 proc delExpiredChunks(relay: Relay) =
   let offset = when TESTMODE:
@@ -521,7 +501,7 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
           relay.db.record_transfer_stat(
             ip = conn.ip,
             pubkey = pubkey,
-            data_out = msg.data_val.len,
+            data_out = msg.data_val.len + msg.data_key.len,
           )
       else:
         break
@@ -579,7 +559,9 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
   of SendData:
     if cmd.send_val.len > RELAY_MAX_MESSAGE_SIZE:
       conn.sendError(cmd, "Data too long", TooLarge)
-    elif not cmd.send_dst.is_valid():
+    elif cmd.send_key.len > RELAY_MAX_KEY_SIZE:
+      conn.sendError(cmd, "Key too long", TooLarge)
+    elif cmd.send_dst.any_invalid():
       conn.sendError(cmd, "Invalid pubkey", InvalidParams)
     else:
       let pubkey = conn.pubkey.get()
@@ -589,150 +571,33 @@ proc handleCommand*[T](relay: Relay[T], conn: var RelayConnection[T], cmd: Relay
         relay.db.record_transfer_stat(
           ip = conn.ip,
           pubkey = pubkey,
-          data_in = cmd.send_val.len,
+          data_in = cmd.send_val.len + cmd.send_key.len,
         )
         relay.db.record_event_stat(
           ip = conn.ip,
           pubkey = pubkey,
           send = 1,
         )
-        if relay.clients.hasKey(cmd.send_dst):
-          # dst is online
-          var other_conn = relay.clients[cmd.send_dst]
-          other_conn.sendMessage(RelayMessage(
-            kind: Data,
-            resp_id: 0,  # Not triggered by other_conn's command
-            data_src: pubkey,
-            data_val: cmd.send_val,
-          ))
-          relay.db.record_transfer_stat(
-            ip = other_conn.ip,
-            pubkey = other_conn.pubkey.get(),
-            data_in = cmd.send_val.len,
-          )
-        else:
-          # dst is offline
-          relay.db.exec(sql"INSERT INTO message (src, dst, data) VALUES (?, ?, ?)",
-              pubkey, cmd.send_dst, cmd.send_val.DbBlob)
-  of StoreChunk:
-    if cmd.chunk_key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-      conn.sendError(cmd, "Key too long", TooLarge)
-    elif cmd.chunk_val.len > RELAY_MAX_CHUNK_SIZE:
-      conn.sendError(cmd, "Value too long", TooLarge)
-    elif cmd.chunk_dst.len > RELAY_MAX_CHUNK_DSTS:
-      conn.sendError(cmd, "Too many recipients", TooLarge)
-    elif cmd.chunk_dst.any_invalid():
-      conn.sendError(cmd, "Invalid pubkey", InvalidParams)
-    else:
-      let pubkey = conn.pubkey.get()
-      if relay.max_chunk_space > 0 and relay.db.chunk_space_used(pubkey) > relay.max_chunk_space:
-        conn.sendError(cmd, "Too much chunk data", StorageLimitExceeded)
-      else:
-        relay.db.record_event_stat(
-          ip = conn.ip,
-          pubkey = pubkey,
-          store = 1,
-        )
-        relay.db.exec(sql"BEGIN")
-        try:
-          relay.db.exec(sql"DELETE FROM chunk_dst WHERE src=? AND key=?", pubkey, cmd.chunk_key.DbBlob)
-          let offset = when TESTMODE:
-              $TIME_SKEW & " seconds"
-            else:
-              "0 seconds"
-          relay.db.exec(sql"""
-            INSERT OR REPLACE INTO chunk (last_used, src, key, val)
-            VALUES (datetime('now', ?), ?, ?, ?)
-            """, offset, pubkey, cmd.chunk_key.DbBlob, cmd.chunk_val.DbBlob)
-          var dsts: seq[SignPublicKey]
-          dsts.add(cmd.chunk_dst)
-          if pubkey notin dsts:
-            dsts.add(pubkey)
-          for dst in dsts:
-            relay.db.exec(sql"INSERT INTO chunk_dst (src, key, dst) VALUES (?, ?, ?)",
-              pubkey, cmd.chunk_key.DbBlob, dst)
-          relay.db.exec(sql"COMMIT")
-        except CatchableError:
-          relay.db.exec(sql"ROLLBACK")
-  of GetChunks:
-    for key in cmd.chunk_keys:
-      if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-        conn.sendError(cmd, "Key too long", TooLarge)
-        return
-    relay.delExpiredChunks()
-    let pubkey = conn.pubkey.get()
-    for key in cmd.chunk_keys:
-      let orow = relay.db.getRow(sql"""
-        SELECT
-          c.val
-        FROM
-          chunk_dst AS d
-          JOIN chunk AS c
-            ON d.src = c.src
-              AND d.key = c.key
-        WHERE
-          d.src = ?
-          AND d.key = ?
-          AND d.dst = ?
-        """, cmd.chunk_src, key.DbBlob, pubkey)
-      if orow.isSome:
-        let row = orow.get()
-        conn.sendMessage(RelayMessage(
-          kind: Chunk,
-          resp_id: cmd.resp_id,
-          chunk_src: cmd.chunk_src,
-          chunk_key: key,
-          chunk_val: some(row[0].b.string),
-        ))
-      else:
-        conn.sendMessage(RelayMessage(
-          kind: Chunk,
-          resp_id: cmd.resp_id,
-          chunk_src: cmd.chunk_src,
-          chunk_key: key,
-          chunk_val: none[string](),
-        ))
-  of HasChunks:
-    for key in cmd.has_keys:
-      if key.len > RELAY_MAX_CHUNK_KEY_SIZE:
-        conn.sendError(cmd, "Key too long", TooLarge)
-        return
-    relay.delExpiredChunks()
-    let pubkey = conn.pubkey.get()
-    var present: seq[string]
-    var absent: seq[string]
-    for key in cmd.has_keys:
-      let orow = relay.db.getRow(sql"""
-        SELECT
-          1
-        FROM
-          chunk_dst AS d
-          JOIN chunk AS c
-            ON d.src = c.src
-              AND d.key = c.key
-        WHERE
-          d.src = ?
-          AND d.key = ?
-          AND d.dst = ?
-        """, cmd.has_src, key.DbBlob, pubkey)
-      if orow.isSome:
-        present.add(key)
-        if cmd.has_src == pubkey:
-          # reset the expiration of the chunk, since the owner
-          # is touching it
-          let offset = when TESTMODE:
-              $TIME_SKEW & " seconds"
-            else:
-              "0 seconds"
-          relay.db.exec(sql"""
-            UPDATE chunk SET last_used = datetime('now', ?) WHERE src = ? AND key = ?
-            """, offset, cmd.has_src, key.DbBlob)
-      else:
-        absent.add(key)
-    conn.sendMessage(RelayMessage(
-      kind: ChunkStatus,
-      resp_id: cmd.resp_id,
-      status_src: cmd.has_src,
-      present: present,
-      absent: absent,
-    ))
+        for dst_pubkey in cmd.send_dst:
+          if relay.clients.hasKey(dst_pubkey):
+            # dst is online
+            var other_conn = relay.clients[dst_pubkey]
+            other_conn.sendMessage(RelayMessage(
+              kind: Data,
+              resp_id: 0,  # Not triggered by other_conn's command
+              data_key: cmd.send_key,
+              data_src: pubkey,
+              data_val: cmd.send_val,
+            ))
+            relay.db.record_transfer_stat(
+              ip = other_conn.ip,
+              pubkey = other_conn.pubkey.get(),
+              data_out = cmd.send_val.len + cmd.send_key.len,
+            )
+          else:
+            # dst is offline
+            relay.db.exec(sql"""
+              INSERT OR REPLACE INTO message
+              (key, src, dst, data)
+              VALUES (?, ?, ?, ?)""",
+              cmd.send_key.DbBlob, pubkey, dst_pubkey, cmd.send_val.DbBlob)

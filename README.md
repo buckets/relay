@@ -59,10 +59,6 @@ Clients send the following commands:
 | `PublishNote`  | Send a few bytes to another client addressed by topic (good for key exchange) |
 | `FetchNote`    | Request a note addressed by topic |
 | `SendData`     | Store/forward bytes to other clients, addressed by relay-authenticated public keys |
-| `StoreChunk`   | Store bytes for other clients to fetch addressed by key and public key. |
-| `GetChunk`     | Request stored chunk |
-| `ChunksPresent` | Ask which chunks exist |
-
 
 ### Server Events
 
@@ -75,8 +71,6 @@ The relay server sends the following events:
 | `Who`           | Challenge for authenticating a client's public/private keys and spam mitigation |
 | `Note`          | Data payload of a note requested by `FetchNote` |
 | `Data`          | Data payload from another client, addressed by relay-authenticated public key |
-| `Chunk`         | Data payload response to `GetChunk` request |
-| `ChunkStatus`   | Response to `ChunksPresent` indicating which chunks exist/don't |
 
 ### Authentication
 
@@ -102,13 +96,12 @@ Client           Relay
 
 ### Data
 
-There are 3 ways clients can exchange data:
+There are 2 ways clients can exchange data:
 
 1. Notes - public notes that are accessed by knowing the note *topic*. Notes are a good way to do key exchange. Notes expire after a short time.
-2. Messages - ordered, stored-and-forwarded messages sent from one client to another client. These are automatically sent to a client upon connection, and deleted when sent. Messages expire after a while.
-3. Chunks - clients store chunks with a string *key* and choose which clients (by their public key) are allowed to fetch uploaded chunks. Chunks may be overwritten. Chunks expire a while after their last update.
+2. Messages - ordered, stored-and-forwarded messages sent from one client to another client. These are automatically sent to a client upon connection, and deleted when sent. Messages expire after a while. Messages with a non-blank key will overwrite undelivered messages with the same key.
 
-All forms of exchanging data are unreliable. Build with that in mind.
+Build relay clients with the understanding that all forms of exchanging data through this relay are unreliable.
 
 #### Notes
 
@@ -142,6 +135,33 @@ Alice             Relay              Bob
   │                 │                 │
   │ SendData(Bob)   │                 │
   ├────────────────►│ Data(Alice)     │
+  │                 ├────────────────►│
+  │                 │                 │
+```
+
+#### Messages with keys
+
+1. Alice sends `SendData(dst=BOBPK, key=apple, data=core)`
+2. Alice sends `SendData(dst=BOBPK, key=banana, data=boat)`
+3. Alice sends `SendData(dst=BOBPK, key=apple, data=pie)` (replacing prior `key=apple` message)
+4. Bob connects
+5. Server sends to Bob `Data(src=ALICEPK, key=banana, data=boat)`
+6. Server sends to Bob `Data(src=ALICEPK, key=apple, data=pie)`
+
+```
+Alice             Relay              Bob
+  │                 │                 │
+  ├───Authenticated─┤                 │
+  │                 │                 │
+  │ SendData(Bob,1) │                 │
+  ├────────────────►│                 │
+  │ SendData(Bob,2) │                 │
+  ├────────────────►│                 │
+  │ SendData(Bob,1) │                 │
+  ├────────────────►│                 │
+  │                 │ Data(Alice, 2)  │
+  │                 ├────────────────►│
+  │                 │ Data(Alice, 1)  │
   │                 ├────────────────►│
   │                 │                 │
 ```
