@@ -11,9 +11,9 @@ import std/os
 
 import chronos except debug, info, warn, error
 
-import bucketsrelay/client
-import bucketsrelay/proto
-import bucketsrelay/asyncstdin
+import ./client
+import ./proto
+import ./asyncstdin
 
 type
   SendHandler = ref object

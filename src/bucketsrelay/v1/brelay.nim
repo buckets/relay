@@ -9,8 +9,8 @@ import std/json
 
 import chronos
 
-import bucketsrelay/common
-import bucketsrelay/server
+import ./common
+import ./server
 
 proc monitorMemory() {.async.} =
   var

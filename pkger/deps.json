@@ -1,0 +1,67 @@
+{
+  "pinned": {
+    "lowdb": {
+      "pkgname": "lowdb",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/PhilippMDoerner/lowdb",
+        "kind": "git"
+      },
+      "sha": "c8bd2c631ed923b25c0bab4cd1ccbe84bf56400b"
+    },
+    "ws": {
+      "pkgname": "ws",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/treeform/ws",
+        "kind": "git"
+      },
+      "sha": "cbb8f763b436669392d10baec2a45778395395cc"
+    },
+    "nimja": {
+      "pkgname": "nimja",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/iffy/nimja",
+        "kind": "git"
+      },
+      "sha": "3ce4c093e3699317b4cdf69111bca38e8e0f2b69"
+    },
+    "db_connector": {
+      "pkgname": "db_connector",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/nim-lang/db_connector",
+        "kind": "git"
+      },
+      "sha": "74aef399e5c232f95c9fc5c987cebac846f09d62"
+    },
+    "argparse": {
+      "pkgname": "argparse",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/iffy/nim-argparse",
+        "kind": "git"
+      },
+      "sha": "98c7c99bfbcaae750ac515a6fd603f85ed68668f"
+    },
+    "libsodium": {
+      "pkgname": "libsodium",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/iffy/nim-libsodium",
+        "kind": "git"
+      },
+      "sha": "d3a116e1047b6b1363dfee08876a8f1c1bb1a128"
+    },
+    "jester": {
+      "pkgname": "jester",
+      "parent": "",
+      "src": {
+        "url": "https://github.com/dom96/jester/",
+        "kind": "git"
+      },
+      "sha": "ac9b8541dce64feff9b53b700cab8496c1816651"
+    }
+  }
+}

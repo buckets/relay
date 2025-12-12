@@ -8,3 +8,9 @@ bucketsrelay.sqlite
 _tests
 !TODO
 fly.toml
+relay.sqlite
+libs
+*.keys
+*.sqlite
+tests/bin
+*.sqlite-journal

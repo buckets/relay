@@ -11,10 +11,9 @@ jobs:
     strategy:
       matrix:
         version:
-          - binary:1.6.18
+          - binary:2.2.4
         os:
           - ubuntu-latest
-          # - macOS-latest
     steps:
     - uses: actions/checkout@v1
     - uses: iffy/install-nim@v5
@@ -22,37 +21,22 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         version: ${{ matrix.version }}
-    - name: Update nimble
-      run: nimble install -y nimble
-    #----------------------------------------
-    # multi user mode (default)
-    #----------------------------------------
-    - name: Install
-      run: nimble install -y
-    - name: Build bins
-      run: nimble multiuserbins
+    - name: Install libsodium
+      run: |
+        sudo apt update -q
+        sudo apt install -y libsodium-dev
+    - name: Install pkger
+      run: nimble install -y https://github.com/iffy/pkger/
+    - name: Install deps
+      run: pkger fetch
     - name: Run tests
       run: |
-        export PATH="${PATH}:$(pwd)/bin"
-        nimble test
-    - name: Command-line tests
-      run: |
-        export PATH="${PATH}:$(pwd)/bin"
-        tests/func1.sh
-    #----------------------------------------
-    # single user mode
-    #----------------------------------------
-    - name: Install (single user mode)
-      run: nimble singleuserbins
-    - name: Run tests (single user mode)
-      run: |
-        export PATH="${PATH}:$(pwd)/bin"
-        nimble -d:relaysingleusermode test
+        export SHOW_LOGS=1
+        tests/all.sh
 
   docker:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v1
-    - run: docker build --file docker/singleuser.Dockerfile .
-    - run: docker build --file docker/multiuser.Dockerfile .
+    - run: docker build --file docker/Dockerfile .
 
