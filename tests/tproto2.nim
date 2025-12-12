@@ -727,17 +727,16 @@ suite "data":
     ))
 
     var carl2 = relay.authenticatedConn(carl.keys)
-    # Carl should receive both messages, one from alice and one from bob
     block:
-      let msg1 = carl2.pop(Data)
-      let msg2 = carl2.pop(Data)
-      # Order might vary, so check both possibilities
-      check (
-        (msg1.data_src == alice.pk and msg1.data_val == "alice_v1" and
-         msg2.data_src == bob.pk and msg2.data_val == "bob_v1") or
-        (msg1.data_src == bob.pk and msg1.data_val == "bob_v1" and
-         msg2.data_src == alice.pk and msg2.data_val == "alice_v1")
-      ) 
+      let msg = carl2.pop(Data)
+      check msg.data_key == "status"
+      check msg.data_src == alice.pk
+      check msg.data_val == "alice_v1"
+    block:
+      let msg = carl2.pop(Data)
+      check msg.data_key == "status"
+      check msg.data_src == bob.pk
+      check msg.data_val == "bob_v1"
 
 suite "anon":
 
