@@ -200,10 +200,14 @@ router myrouter:
     
     # total stored
     let total_stored_note = relay.db.getRow(sql"SELECT coalesce(sum(length(data)), 0) FROM note").get()[0].i
-    let total_stored_message = relay.db.getRow(sql"SELECT sum(coalesce(length(data), 0) + coalesce(length(key), 0)) FROM message").get()[0].i
+    let total_stored_message = relay.db.getRow(sql"""
+      SELECT
+        COALESCE(SUM(LENGTH(md.data) + LENGTH(md.key)), 0)
+      FROM message_data md
+    """).get()[0].i
     let total_stored = total_stored_note + total_stored_message
     let num_note = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM note").get()[0].i
-    let num_message = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM message").get()[0].i
+    let num_message = relay.db.getRow(sql"SELECT coalesce(count(*), 0) FROM message_recipient").get()[0].i
 
     # top traffic by ip
     var traffic_by_ip: seq[TransferTotal]
@@ -259,11 +263,25 @@ router myrouter:
     for row in relay.db.getAllRows(sql"""
         SELECT
           src,
-          SUM(COALESCE(LENGTH(data), 0) + COALESCE(LENGTH(key), 0)) AS msg_bytes
-        FROM
-          message
-        GROUP BY
-          src
+          SUM(total_bytes) AS total_bytes
+        FROM (
+          -- Note storage
+          SELECT
+            src,
+            SUM(LENGTH(data)) AS total_bytes
+          FROM note
+          GROUP BY src
+
+          UNION ALL
+
+          -- Message data storage
+          SELECT
+            md.src,
+            SUM(LENGTH(md.data) + LENGTH(md.key)) AS total_bytes
+          FROM message_data md
+          GROUP BY md.src
+        )
+        GROUP BY src
         ORDER BY 2 DESC
         LIMIT 10
       """):

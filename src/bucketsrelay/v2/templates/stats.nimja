@@ -112,7 +112,7 @@
       {% endfor %}
     </table>
 
-    <h2>Top storage by Pubkey</h2>
+    <h2>Top Storage by Pubkey</h2>
     <table>
       <tr>
         <th>Pubkey</th>
@@ -126,7 +126,7 @@
       {% endfor %}
     </table>
 
-    <h2>Top events by Pubkey</h2>
+    <h2>Top Events by Pubkey</h2>
     <div class="rows">
       <div>
         <table>
