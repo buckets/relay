@@ -676,6 +676,8 @@ suite "data":
       check carl2.pop(Data).data_val == "cider" 
   
   test "drop recipient":
+    # When updating a keyed message to a subset of recipients,
+    # recipients not in the new send still get their old pending message
     let relay = testRelay()
     var alice = relay.authenticatedConn()
     var bob = relay.authenticatedConn()
@@ -692,7 +694,7 @@ suite "data":
     relay.handleCommand(alice, RelayCommand(
       kind: SendData,
       send_key: "apple",
-      send_dst: @[bob.pk],
+      send_dst: @[bob.pk],  # Carl not included in update
       send_val: "cider",
     ))
     block:
@@ -700,7 +702,42 @@ suite "data":
       check bob2.pop(Data).data_val == "cider"
     block:
       var carl2 = relay.authenticatedConn(carl.keys)
-      check carl2.pop(Data).data_val == "core" 
+      # Carl still has his original pending message
+      check carl2.pop(Data).data_val == "core"
+
+  test "multiple senders same key":
+    # Different senders can send messages with the same key to the same recipient
+    let relay = testRelay()
+    var alice = relay.authenticatedConn()
+    var bob = relay.authenticatedConn()
+    var carl = relay.authenticatedConn()
+    relay.disconnect(carl)
+
+    relay.handleCommand(alice, RelayCommand(
+      kind: SendData,
+      send_key: "status",
+      send_dst: @[carl.pk],
+      send_val: "alice_v1",
+    ))
+    relay.handleCommand(bob, RelayCommand(
+      kind: SendData,
+      send_key: "status",
+      send_dst: @[carl.pk],
+      send_val: "bob_v1",
+    ))
+
+    var carl2 = relay.authenticatedConn(carl.keys)
+    # Carl should receive both messages, one from alice and one from bob
+    block:
+      let msg1 = carl2.pop(Data)
+      let msg2 = carl2.pop(Data)
+      # Order might vary, so check both possibilities
+      check (
+        (msg1.data_src == alice.pk and msg1.data_val == "alice_v1" and
+         msg2.data_src == bob.pk and msg2.data_val == "bob_v1") or
+        (msg1.data_src == bob.pk and msg1.data_val == "bob_v1" and
+         msg2.data_src == alice.pk and msg2.data_val == "alice_v1")
+      ) 
 
 suite "anon":
 
